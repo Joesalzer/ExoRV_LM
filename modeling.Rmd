@@ -1,0 +1,1136 @@
+---
+title: "NEID Solar Data -- Linear Modeling"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(readxl)
+library(lme4)
+library(MASS)
+library(gridExtra)
+library(car)
+library(glmnet)
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
+```
+
+
+
+# Loading data
+
+```{r}
+final_fits = tibble( read.csv(str_c(wd_data, "final_fits.csv") ) ) %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
+  mutate( lambda = factor(round(lambda,3)) )
+final_fits
+```
+
+
+
+```{r}
+# list of lambdas in final_fits
+final_lams = ( final_fits %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
+length(final_lams)
+```
+
+# linear models
+
+standardize final_fits (except for rv,lambda,order_idx,obs_date, and repeat_order)
+
+also, add a column for centered rv by line
+
+```{r}
+scaled_final_fits = cbind(
+  final_fits %>% dplyr::select(c(rv,lambda,order_idx,obs_date,repeat_order)),
+  
+  final_fits %>%
+    dplyr::select(!c(rv,lambda,order_idx,obs_date,repeat_order)) %>%
+    scale() %>%
+    as_tibble()
+)
+
+# convert lambda, date, and order_idx to factors remove repeat_orders
+# also create column of centered rv by lambda 
+scaled_final_fits = scaled_final_fits %>%
+  mutate(lambda = factor(lambda),
+         order_idx = factor(order_idx),
+         obs_date = factor(obs_date) ) %>%
+  group_by(lambda, order_idx) %>%
+  mutate(centered_rv = rv - mean(rv)) %>%
+  ungroup() %>%
+  dplyr::select(!c(repeat_order))
+```
+
+```{r}
+scaled_final_fits
+scaled_final_fits %>% dplyr::select(lambda, rv, centered_rv)
+```
+
+## model 0 (date, time, order dependence no intercept)
+
+```{r}
+lm0 = lm(centered_rv ~ 0 + b1*lambda + obs_date + order_idx, scaled_final_fits )
+```
+
+*check orders for non-singularities*
+```{r}
+scaled_final_fits %>%
+  filter(order_idx == 21)
+```
+
+Graph of the coefficients of this model:
+
+```{r}
+datecoef.df = tibble( 
+                obs_date = names(lm0$coefficients[ startsWith( names(lm0$coefficients), "obs_date") ]),
+                coef_og = lm0$coefficients[ startsWith( names(lm0$coefficients), "obs_date") ]
+              ) %>%
+              mutate(obs_date = factor(str_sub(obs_date,9)))
+datecoef.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = obs_date, y = coef_og)) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks = element_blank() )
+```
+
+```{r}
+lambdacoef.df = tibble( 
+                lambda = names(lm0$coefficients[ startsWith( names(lm0$coefficients), "lambda") ]),
+                coef_og = lm0$coefficients[ startsWith( names(lm0$coefficients), "lambda") ]
+              ) %>%
+              mutate(lambda = factor(str_sub(lambda,7)))
+lambdacoef.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = coef_og)) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks = element_blank() )
+```
+
+
+```{r}
+plot(lm0, which=1:2)
+```
+
+```{r}
+summary(lm0)$adj.r.squared
+summary(lm0)$sigma
+```
+
+
+```{r}
+rm(lm0, datecoef.df, lambdacoef.df)
+```
+
+## model for rv (chosen stepwise model)
+
+```{r}
+lm1 = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data=scaled_final_fits)
+```
+
+```{r}
+summary(lm1)$adj.r.squared
+summary(lm1)$sigma
+```
+
+```{r}
+plot(lm1,which=1)
+```
+
+```{r}
+plot(lm1,which=2)
+```
+
+```{r}
+rm(lm1)
+```
+
+## model for rv (chosen stepwise model, with interaction between lambda and b1)
+
+```{r}
+lm2 = lm(rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data = scaled_final_fits)
+```
+
+```{r}
+summary(lm2)$adj.r.squared
+summary(lm2)$sigma
+```
+
+```{r}
+# dataframe of coefficients
+coef.df = tibble( coef = rownames(summary(lm2)$coefficients),
+                  estimate = summary(lm2)$coefficients[,1],
+                  se = summary(lm2)$coefficients[,2],
+                  pval = summary(lm2)$coefficients[,4] )
+```
+
+```{r}
+# non fixed effects coefficients
+coef.df %>%
+  filter( !startsWith( coef, "obs_date"), !startsWith( coef, "lambda"), !startsWith( coef, "order_idx")  )
+```
+
+```{r}
+coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+```{r}
+plot(lm2,which=1:2)
+```
+
+```{r}
+rm(lm2)
+```
+
+## model for centered rv (chosen stepwise model, with interaction between lambda and b1)
+
+```{r}
+lm3 = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data = scaled_final_fits)
+```
+
+```{r}
+summary(lm3)$adj.r.squared
+summary(lm3)$sigma
+```
+
+```{r}
+# dataframe of coefficients
+coef.df = tibble( coef = rownames(summary(lm3)$coefficients),
+                  estimate = summary(lm3)$coefficients[,1],
+                  se = summary(lm3)$coefficients[,2],
+                  pval = summary(lm3)$coefficients[,4] )
+```
+
+```{r}
+# non fixed effects coefficients
+coef.df %>%
+  filter( !startsWith( coef, "obs_date"), !startsWith( coef, "lambda"), !startsWith( coef, "order_idx")  )
+```
+
+```{r}
+coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - se, ymax = estimate + se))
+```
+
+```{r}
+plot(lm3,which=1:2)
+```
+
+### Variance inflation factor
+
+```{r, eval = F}
+# removing non-singularities from lm above
+vif.df = 
+  as_tibble( model.matrix(~ centered_rv + lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data = scaled_final_fits) ) %>%
+  dplyr::select(!attributes(alias(lm3)$Complete)$dimnames[[1]]) %>%
+  dplyr::select(!"(Intercept)")
+
+# run lm on modified dataframe (that excluded non-singularities)
+vif.lm = lm(centered_rv ~ ., data = vif.df)
+
+# check if r2 and rmse are the same 
+summary(vif.lm)$adj.r.squared
+summary(vif.lm)$sigma
+
+vif.coefs = vif(vif.lm)
+
+# every single coefficient has vif of NaN...
+all( is.nan(vif.coefs) )
+
+rm(vif.df,vif.lm,vif.coefs)
+```
+
+*Strange results when removing non-singularities from og model (should be the exact same fit as that model). This occurs even when I remove the "problem" categorical variables like order_idx, and lambda b1 interaction.*
+
+Instead, remove all categorical (lambda, order_idx, obs_date):
+
+```{r}
+vif.lm = lm(centered_rv ~ b1 + gh_5 + depth1 + a1 + snr  + width1 + 
+    gh_0, data = scaled_final_fits)
+ 
+t( t( vif(vif.lm) ) )
+```
+
+```{r}
+vif.lm = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_1 + gh_2 + gh_4 + gh_3 + gh_5 + depth1 + a1 + snr  + width1 + gh_0, data = scaled_final_fits)
+```
+
+```{r}
+summary(vif.lm)$adj.r.squared
+summary(vif.lm)$sigma
+```
+
+as expected, most gh coefficients are highly collinear whereas most other covariates are not collinear
+
+
+```{r}
+rm(lm3, coef.df, vif.lm)
+```
+
+
+### injecting perturbations in RV
+
+
+```{r}
+lmX = lm(rv ~ 0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data=scaled_final_fits)
+```
+
+
+```{r}
+mean(scaled_final_fits$rv)
+sd(scaled_final_fits$rv)
+```
+
+for each day add random noise, look at lm of lambda and date fixed effects
+
+
+big perturbation: N(0, 148^2)
+small perturbation: N(0, 10^2)
+
+```{r}
+# create new dataframe with perturbed rv's for every date
+pert.df = scaled_final_fits %>%
+  group_by(obs_date) %>%
+  mutate(pert_small = rnorm(1, 0, sd = 10),
+         pert_big = rnorm(1, 0, sd = 148),
+         rv_pert_small = rv + pert_small,
+         rv_pert_big = rv + pert_big) %>%
+  ungroup()
+pert.df
+```
+
+
+```{r}
+# run our models on the perturbed rv's
+lm.pert.small = lm(rv_pert_small ~ 0 obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, pert.df)
+lm.pert.big = lm(rv_pert_big ~  0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, pert.df)
+```
+
+
+```{r}
+# create a dataframe, each row is a date and contains the original coefficients, the new coefficients, and the size of the perturbations
+date.pert.coef.df = 
+  tibble( obs_date = names(lmX$coefficients[ startsWith( names(lmX$coefficients), "obs_date") ]),
+        coef_og = lmX$coefficients[ startsWith( names(lmX$coefficients), "obs_date") ] ) %>%
+  mutate(obs_date = factor(str_sub(obs_date,9))) %>%
+  cbind(tibble( coef_small = lm.pert.small$coefficients[ startsWith( names(lm.pert.small$coefficients), "obs_date") ] )) %>%
+  cbind(tibble( coef_big = lm.pert.big$coefficients[ startsWith( names(lm.pert.big$coefficients), "obs_date") ] )) %>%
+  full_join(pert.df %>% dplyr::select(obs_date, pert_small, pert_big) %>% unique(), by = "obs_date" )
+date.pert.coef.df
+```
+
+```{r}
+# plot 
+date.pert.coef.df %>%
+  ggplot() +
+  geom_point( mapping = aes(x = obs_date, y = coef_og) ) +
+  geom_point( mapping = aes(x = obs_date, y = coef_small), color = "blue" ) +
+  geom_linerange( mapping = aes(x = obs_date, ymin = coef_og, ymax = coef_og + pert_small) ) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks = element_blank() )
+```
+
+```{r}
+date.pert.coef.df %>%
+  mutate(diff_small = abs( coef_og + pert_small - coef_small  ),
+         diff_big = abs( coef_og + pert_big - coef_big  ))
+```
+
+```{r}
+rm(date.pert.coef.df, lm.pert.small, lm.pert.big, pert.df, lmX)
+```
+
+
+
+
+## LASSO
+
+```{r}
+# create vector of response variable
+centered_rv = ( scaled_final_fits %>% drop_na() )$centered_rv
+```
+
+*LASSO: no interaction terms*
+
+```{r}
+# placeholder lm model to find out which categories are non-singular
+lm.test = lm(centered_rv ~ lambda + order_idx + obs_date, data = scaled_final_fits )
+```
+
+```{r}
+# remove non-singular categories and create a dataframe out of them
+cat.df = as_tibble( model.matrix(~ lambda + order_idx + obs_date, data = scaled_final_fits %>% drop_na()) ) %>%
+  dplyr::select(!attributes(alias(lm.test)$Complete)$dimnames[[1]]) %>%
+  dplyr::select(!"(Intercept)")
+```
+
+```{r}
+rm(lm.test)
+```
+
+```{r}
+# covariates not-including categorical variables
+covar.df = scaled_final_fits %>%
+  dplyr::select(gh_0, gh_2, gh_3, gh_4, gh_5 , gh_6 , gh_7 , gh_8 , gh_9 , gh_10 , gh_11 , gh_12,
+                snr, a1, depth1, width1, b1) %>%
+  drop_na()
+```
+
+```{r}
+# combine categorical and non-categorical variables into one matrix
+# non-categorical vars appear before categorical vars
+Xlasso = data.matrix( cbind(covar.df,cat.df) )
+dim(Xlasso)
+
+# number of covariates
+n.covar = dim(covar.df)[2]
+n.covar
+# number of categories
+n.cat = ncol(Xlasso) - n.covar
+n.cat
+```
+
+```{r}
+# cv lasso, penalty factor means we only have penalties on non-categorical vars
+cv_model = cv.glmnet(Xlasso, 
+                     centered_rv,
+                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
+                     alpha = 1)
+```
+
+```{r}
+cv_model$lambda.min
+plot(cv_model)
+```
+
+```{r}
+# create the best model using the min lambda
+best.model = glmnet(Xlasso, 
+                     centered_rv,
+                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
+                     alpha = 1,
+                     lambda = cv_model$lambda.min)
+```
+
+```{r}
+# look at coeficients of non-cat vars
+head( coef(best.model), n.covar + 1 )
+```
+
+
+*LASSO: with interaction terms b/w non-categorical variables*
+
+```{r}
+covar2.df = model.matrix( ~ 0 + .^2, data = covar.df)
+```
+
+
+```{r}
+# combine categorical and non-categorical variables into one matrix
+# non-categorical vars appear before categorical vars
+Xlasso = data.matrix( cbind(covar2.df,cat.df) )
+dim(Xlasso)
+
+# number of covariates
+n.covar = dim(covar2.df)[2]
+n.covar
+# number of categories
+n.cat = ncol(Xlasso) - n.covar
+n.cat
+```
+
+```{r}
+# cv lasso, penalty factor means we only have penalties on non-categorical vars
+cv_model = cv.glmnet(Xlasso, 
+                     centered_rv,
+                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
+                     alpha = 1)
+```
+
+
+```{r}
+cv_model$lambda.min
+plot(cv_model)
+```
+
+```{r}
+# create the best model using the min lambda
+best.model = glmnet(Xlasso, 
+                     centered_rv,
+                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
+                     alpha = 1,
+                     lambda = cv_model$lambda.min)
+```
+
+```{r}
+# look at coeficients of non-cat vars
+head( coef(best.model), n.covar + 1 )
+```
+
+
+
+
+
+
+## stepwise model
+
+```{r, eval = F}
+df.step = scaled_final_fits %>%
+  dplyr::select(rv, lambda, order_idx, obs_date, 
+                gh_0, gh_2, gh_3, gh_4, gh_5 , gh_6 , gh_7 , gh_8 , gh_9 , gh_10 , gh_11 , gh_12,
+                snr, a1, depth1, width1, b1) %>% 
+  drop_na()
+
+base.mdl = lm(rv ~ lambda + order_idx + obs_date, data=df.step)
+#start.mdl = lm(rv ~ lambda + order_idx + obs_date + gh_0 + lam_c1 + gh_9 + sigma_gh_1, data=df.step)
+full.mdl = lm(rv ~ lambda + order_idx + obs_date + ., data=df.step)
+
+# k=2 uses AIC, k=log(n) n = sample size uses BIC
+step.mdl = step(base.mdl, scope = list(lower = base.mdl, upper = full.mdl), direction = "both", k = 2)
+
+slope.model = lm(rv ~ lambda*b1 + obs_date, data = scaled_final_fits)
+```
+
+
+
+
+
+
+# Cross-validation
+
+### 80/20 split (non-centered rv model)
+
+```{r}
+set.seed(123)
+
+# sample size
+n = length(scaled_final_fits$rv)
+
+# creating training data as 80% of the dataset
+random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
+```
+
+```{r}
+# generating training dataset
+train = scaled_final_fits[random_sample, ]
+
+# generating testing dataset
+test = scaled_final_fits[!random_sample, ]
+```
+
+
+```{r}
+# linear model on training data
+lm.train = lm(rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+```
+
+```{r}
+# add column of predicted rv to test dataframe
+test$pred_rv = predict(lm.train, newdata = test)
+# add columns of prediction errors
+test$predSE = (test$pred_rv-test$rv)^2
+test$predAE = abs(test$pred_rv-test$rv)
+# replace snr in test data with unscaled snr (for visuals below)
+test$snr = final_fits[!random_sample, ]$snr
+```
+
+```{r}
+test %>%
+  ggplot(mapping = aes(x = pred_rv, y = rv, color = order_idx)) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+```
+
+```{r}
+# snr*(predicted_rv - actual_rv) histogram
+test %>%
+  ggplot(mapping = aes(x = snr*(pred_rv-rv))) +
+  geom_histogram()
+```
+
+predicted rv by snr
+
+```{r}
+test %>%
+  ggplot(mapping = aes(x = snr, y = predAE, color = as.numeric(lambda)) ) +
+  geom_point()
+```
+
+```{r}
+sqrt( mean( (test$rv - test$pred_rv)^2 ) )
+mean( abs(test$rv - test$pred_rv) )
+```
+
+```{r}
+rm(random_sample, train, test, lm.train)
+```
+
+### 80/20 split (centered rv model)
+
+```{r}
+set.seed(123)
+
+# sample size
+n = length(scaled_final_fits$rv)
+
+# creating training data as 80% of the dataset
+random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
+```
+
+```{r}
+# generating training dataset
+train = scaled_final_fits[random_sample, ]
+
+# generating testing dataset
+test = scaled_final_fits[!random_sample, ]
+```
+
+
+```{r}
+# linear model on training data
+lm.train = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+```
+
+```{r}
+# add column of predicted rv to test dataframe
+test$pred_rv = predict(lm.train, newdata = test)
+# add columns of prediction errors
+test$predSE = (test$pred_rv-test$centered_rv)^2
+test$predAE = abs(test$pred_rv-test$centered_rv)
+# replace snr in test data with unscaled snr (for visuals below)
+test$snr = final_fits[!random_sample, ]$snr
+```
+
+```{r}
+#png(filename="crossval_8020.png", width=1000, height=500)
+test %>%
+  ggplot(mapping = aes(x = pred_rv, y = centered_rv, color = order_idx)) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+#dev.off()
+```
+
+```{r}
+# snr*(predicted_rv - actual_rv) histogram
+test %>%
+  ggplot(mapping = aes(x = snr*(pred_rv-centered_rv))) +
+  geom_histogram()
+```
+
+predicted rv by snr
+
+```{r}
+test %>%
+  ggplot(mapping = aes(x = snr, y = predAE, color = as.numeric(lambda)) ) +
+  geom_point()
+```
+
+```{r}
+sqrt( mean( (test$centered_rv - test$pred_rv)^2 ) )
+mean( abs(test$centered_rv - test$pred_rv) )
+```
+
+```{r}
+rm(random_sample, train, test, lm.train)
+```
+
+
+### leave-one-day out (lambda x b1 interaction model) (non-centered rv model) for every date
+
+```{r}
+# initialize our prediction data
+pred.df = tibble( pred_rv = c(), 
+                  true_rv = c(),
+                  lambda = c(),
+                  obs_date = c(),
+                  order_idx = c(),
+                  snr = c() )
+pred.df
+```
+
+```{r}
+# list of obs_date in scaled_final_fits
+final_days = ( scaled_final_fits %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
+```
+
+BEGIN FOR LOOP
+
+```{r}
+for (day in final_days) {
+  # create training data without a specific date
+  train = scaled_final_fits %>% filter(obs_date != day) %>% drop_na()
+  # create testing data with the specific date
+  test = scaled_final_fits %>% filter(obs_date == day) %>% drop_na()
+  
+  # linear model on training data
+  lm.train = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+  
+  # get the data matrix of our test dataset
+  Xtest = model.matrix(rv ~ lambda*b1 + order_idx + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, test)
+  
+  # get rid of model coefficients associated with obs_date
+  model_coefs = lm.train$coefficients[ !startsWith( names(lm.train$coefficients), "obs_date") ]
+  model_coefs[is.na(model_coefs)] = 0
+  
+  # check if we can multiply our coefficients and data matrix to get predictions
+  print(all( names(model_coefs) == colnames(Xtest) ))
+  print(day)
+  
+  # create temp dataframe with predicted rv, true rv, lambda, obs date, order, and original snr
+  temp = tibble( pred_rv = Xtest %*% model_coefs, 
+                 true_rv = test$rv,
+                 lambda = test$lambda,
+                 obs_date = test$obs_date,
+                 order_idx = test$order_idx,
+                 snr = ( final_fits %>% filter(factor(obs_date) == day) %>% drop_na() )$snr )
+  
+  # combine temp dataframe and the full prediction dataframe
+  pred.df = rbind(pred.df, temp )
+  
+  # remove temp dataframe
+  rm(temp)
+  
+}
+```
+
+
+```{r}
+pred.df
+```
+
+
+```{r}
+#png(filename="crossval_lodo.png", width=1000, height=500)
+pred.df %>%
+  ggplot(mapping = aes(x = pred_rv, y = true_rv, color = order_idx )) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+#dev.off()
+```
+
+```{r}
+# snr*(predicted_rv - actual_rv) histogram
+pred.df %>%
+  ggplot(mapping = aes(x = snr*(pred_rv-true_rv))) +
+  geom_histogram()
+```
+
+predicted rv by snr
+
+```{r}
+pred.df %>%
+  ggplot(mapping = aes(x = snr, y = abs(pred_rv-true_rv), color = as.numeric(lambda)) ) +
+  geom_point()
+```
+
+```{r}
+sqrt( mean( (pred.df$true_rv - pred.df$pred_rv)^2 ) )
+mean( abs(pred.df$true_rv - pred.df$pred_rv) )
+```
+
+
+#### Tails of prediction errors
+
+```{r}
+pred.df = pred.df %>% mutate(pred_error = true_rv - pred_rv)
+```
+
+```{r}
+# quantiles of errors
+err.quantiles = quantile(pred.df$pred_error, probs = c(.05, .25, .5, .75, .95))
+err.quantiles
+```
+
+```{r}
+# dataframe of tails (5% and 95%) of predictions
+tail.df = pred.df %>% filter(pred_error < err.quantiles[1] | pred_error > err.quantiles[5])
+```
+
+
+```{r}
+length( unique(tail.df$lambda) )
+length( unique(tail.df$order_idx) )
+length( unique(tail.df$obs_date) )
+```
+
+123 (out of 245) lines appear in the tail of the distribution
+60 (out of 69) orders appear in the tail of the distribution
+every date appears in the tail of the distribution
+
+Bar graph of how many times a specific line appears in the tails of the prediction error distribution
+```{r}
+tail.df %>%
+  count(lambda) %>%
+  ggplot(aes(x = lambda, y = n)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks = element_blank() )
+```
+
+Which lambdas appear in tail more than 200 times:
+```{r}
+bad_lams = ( tail.df %>% group_by(lambda) %>% summarize(n = n()) %>% filter(n > 200) )$lambda
+bad_lams 
+```
+
+```{r}
+tail.df
+```
+
+```{r}
+tail.df %>%
+  group_by(lambda,order_idx) %>%
+  summarize(
+            min = min(snr),
+            max = max(snr),
+            median = median(snr),
+            mean = mean(snr))
+```
+
+snr distribution by whether it is in tail or not
+
+```{r}
+pred.df %>%
+  mutate( isTail = if_else(pred_error < err.quantiles[1] | pred_error > err.quantiles[5], T, F)  ) %>%
+  ggplot(mapping = aes(x = snr, color = isTail)) +
+  geom_density()
+```
+
+#### Influential lines
+
+Let's remove the 3 "bad" lambdas and see how much we improve our model:
+
+```{r}
+lm.cv = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))
+```
+
+```{r}
+summary(lm.cv)$sigma
+```
+
+*compared to 4.861163*
+
+```{r}
+lm.cv = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))
+```
+
+```{r}
+summary(lm.cv)$sigma
+```
+*compared to 4.385977*
+
+
+```{r}
+set.seed(456)
+
+# sample size
+n = length( (scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))$rv)
+# creating training data as 80% of the dataset
+random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
+
+# generating training dataset
+train = (scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))[random_sample, ]
+
+# generating testing dataset
+test = (scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))[!random_sample, ]
+
+# linear model on training data
+lm.train = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+
+# add column of predicted rv to test dataframe
+test$pred_rv = predict(lm.train, newdata = test)
+# add columns of prediction errors
+test$predSE = (test$pred_rv-test$centered_rv)^2
+test$predAE = abs(test$pred_rv-test$centered_rv)
+```
+```{r}
+sqrt( mean( (test$centered_rv - test$pred_rv)^2 ) )
+mean( abs(test$centered_rv - test$pred_rv) )
+```
+
+*compared ~roughly~ to 4.473138 and 2.454458*
+
+```{r}
+#png(filename="crossval_8020.png", width=1000, height=500)
+test %>%
+  ggplot(mapping = aes(x = pred_rv, y = centered_rv, color = order_idx)) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+#dev.off()
+```
+
+```{r}
+rm(pred.df, test, train, Xtest, day.num, model_coefs, lm.train)
+```
+
+
+
+
+### leave-one-row out (single row)
+
+```{r}
+row.num = 68
+
+lm0 = lm(rv ~ lambda + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, scaled_final_fits %>% filter(row_number() != row.num) )
+
+# prediction on left-out model
+pred.rv = predict(lm0, newdata = scaled_final_fits %>% filter(row_number() == row.num))
+
+# ground truth rv
+actual.rv = scaled_final_fits %>% filter(row_number() == row.num) %>% dplyr::select(rv)
+
+# prediction error
+absolute.error = abs(pred.rv - actual.rv)
+
+rm(lm0, absolute.error, actual.rv, pred.rv, row.num)
+```
+
+### leave-one-line out (single line)
+
+```{r}
+line.num = 2
+```
+
+```{r}
+final_lams[line.num]
+```
+
+```{r}
+# create training data without a specific lambda
+train = scaled_final_fits %>% filter(lambda != final_lams[line.num])
+# create testing data with the specific lambda
+test = scaled_final_fits %>% filter(lambda == final_lams[line.num])
+```
+
+```{r}
+test
+```
+
+```{r}
+# linear model on training data
+lm.train = lm(rv ~ lambda + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+```
+
+```{r}
+# create a model matrix of our testing data without lambda
+Xtest = model.matrix(rv ~ order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, test)
+```
+
+```{r}
+# get rid of model coefficients associated with obs_date
+model_coefs = lm.train$coefficients[ !startsWith( names(lm.train$coefficients), "lambda") ]
+model_coefs[is.na(model_coefs)] = 0
+```
+
+```{r}
+# check that model coefs and column names of our data matrix match
+all( names(model_coefs) == colnames(Xtest) )
+```
+
+```{r}
+# create dataframe of predicted rv, true rv, and original (unscaled snr)
+pred.df = tibble( pred_rv = Xtest %*% model_coefs, 
+                  true_rv = test$rv, 
+                  snr = (final_fits %>% filter(lambda == final_lams[line.num]) )$snr,
+                  order_idx = test$order_idx)
+pred.df
+```
+
+```{r}
+pred.df %>%
+  ggplot(mapping = aes(x = pred_rv, y = true_rv, color = order_idx)) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+```
+
+```{r}
+# snr*(predicted_rv - actual_rv) histogram
+pred.df %>%
+  ggplot(mapping = aes(x = snr*(pred_rv-true_rv))) +
+  geom_histogram()
+```
+
+
+```{r}
+sqrt( mean( (pred.df$true_rv - pred.df$pred_rv)^2 ) )
+mean( abs(pred.df$true_rv - pred.df$pred_rv) )
+```
+
+```{r}
+rm(lm.train, pred.df, test, train, Xtest, line.num, model_coefs)
+```
+
+### leave-one-day out (single day)
+
+```{r}
+# list of obs_date in scaled_final_fits
+final_days = ( scaled_final_fits %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
+day.num = 100
+```
+
+```{r}
+# create training data without a specific date
+train = scaled_final_fits %>% filter(obs_date != final_days[day.num])
+# create testing data with the specific date
+test = scaled_final_fits %>% filter(obs_date == final_days[day.num])
+```
+
+
+```{r}
+# linear model on training data
+lm.train = lm(rv ~ lambda + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+```
+
+
+```{r}
+# create a model matrix of our testing data without a specific day
+Xtest = model.matrix(rv ~ lambda + order_idx + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, test)
+```
+
+```{r}
+# get rid of model coefficients associated with obs_date
+model_coefs = lm.train$coefficients[ !startsWith( names(lm.train$coefficients), "obs_date") ]
+model_coefs[is.na(model_coefs)] = 0
+```
+
+
+```{r}
+all( names(model_coefs) == colnames(Xtest) )
+```
+
+
+```{r}
+# create dataframe of predicted rv, true rv, and original (unscaled snr)
+pred.df = tibble( pred_rv = Xtest %*% model_coefs, 
+                  true_rv = test$rv, 
+                  snr = ( final_fits %>% filter(factor(obs_date) == final_days[day.num]) )$snr,
+                  order_idx = test$order_idx )
+pred.df
+```
+
+```{r}
+pred.df %>%
+  ggplot(mapping = aes(x = pred_rv, y = true_rv )) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+```
+```{r}
+pred.df %>%
+  ggplot(mapping = aes(x = snr*(pred_rv-true_rv))) +
+  geom_histogram()
+```
+
+```{r}
+sqrt( mean( (pred.df$true_rv - pred.df$pred_rv)^2 ) )
+mean( abs(pred.df$true_rv - pred.df$pred_rv) )
+```
+
+```{r}
+rm(lm.train, pred.df, test, train, Xtest)
+```
+
+
+### leave-one-day out (lambda x b1 interaction model, single day)
+
+
+```{r}
+# create training data without a specific date
+train = scaled_final_fits %>% filter(obs_date != final_days[day.num])
+# create testing data with the specific date
+test = scaled_final_fits %>% filter(obs_date == final_days[day.num])
+```
+
+
+```{r}
+# linear model on training data
+lm.train = lm(rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, train )
+```
+
+```{r}
+Xtest = model.matrix(rv ~ lambda*b1 + order_idx + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, test)
+```
+
+```{r}
+# get rid of model coefficients associated with obs_date
+model_coefs = lm.train$coefficients[ !startsWith( names(lm.train$coefficients), "obs_date") ]
+model_coefs[is.na(model_coefs)] = 0
+```
+
+
+```{r}
+all( names(model_coefs) == colnames(Xtest) )
+```
+
+```{r}
+pred.df = tibble( pred_rv = Xtest %*% model_coefs , true_rv = test$rv  )
+pred.df %>%
+  ggplot(mapping = aes(x = pred_rv, y = true_rv )) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+```
+
+```{r}
+sqrt( mean( (pred.df$true_rv - pred.df$pred_rv)^2 ) )
+mean( abs(pred.df$true_rv - pred.df$pred_rv) )
+```
+
+
+
+

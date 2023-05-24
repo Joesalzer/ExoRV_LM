@@ -1,0 +1,347 @@
+---
+title: "NEID Solar Data -- Clean Data"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Produce 2 final_fits dataframes to download depending on which gh coefficients we have
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(readxl)
+library(lme4)
+library(MASS)
+library(gridExtra)
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
+```
+
+
+# Loading data
+
+## pixels
+
+```{r}
+# read in neid_linefinder
+line_fits = read_csv(str_c(wd_data, "neid_linefinder_line_fits.csv")) %>%
+  rename(fit_lam_c = "fit_λc",
+         fit_sig2 = "fit_σ²",
+         chi2_per_dof = "χ²_per_dof") %>%
+  dplyr::select(line_id, pixels)
+
+line_fits
+
+# create matrix of starting pixel (1st col) and ending pixel (2nd col)
+pixel_mat = matrix( as.numeric( str_split(line_fits$pixels, regex(":"), simplify = T) ), ncol = 2, byrow = F )
+
+# create col of middle pixel
+line_fits$mid_pixel = ( pixel_mat[,2] + pixel_mat[,1] )/2
+
+# remove pixel_mat
+rm(pixel_mat)
+
+# denote m_pixel as the first row's middle pixel
+line_fits = line_fits %>%
+  group_by(line_id) %>%
+  summarize(m_pixel = mid_pixel[1]) %>%
+  ungroup()
+```
+
+```{r}
+line_fits
+```
+
+
+```{r}
+pixel.df = line_fits %>%
+  right_join( 
+    read_csv(str_c(wd_data, "linelist_20210527_rll_overlap=1_slope=10000_quant=90_norm=cont_mask=3.csv")) %>% dplyr::select(line_id, lambda),
+             by = "line_id" ) %>%
+  dplyr::select(!line_id)
+pixel.df
+```
+
+```{r}
+rm(line_fits, pixel.df)
+```
+
+## load bisectors_test.csv
+
+```{r}
+#bisectors_test = read.csv("bisectors_test.csv")
+#bisectors_test
+```
+
+
+## join final_fits and pixel.df
+
+```{r}
+#final_fits %>%
+#  left_join(pixel.df, by = "lambda") %>%
+#  dplyr::select(lambda, order_idx, obs_date, m_pixel)
+```
+
+
+
+
+## loading solar_line_fits_20230215.csv
+
+```{r}
+# solar line fits has lambda, depth and width measurements
+solar_line_fits = read_csv(str_c(wd_data, "solar_line_fits_20230215.csv")) %>%
+  rename(lam_c1 = "λc1") %>%
+  mutate(lambda = round(lambda,3)) %>%
+  mutate(obs_date = as.Date(obs_date)) 
+solar_line_fits
+```
+
+```{r}
+# look at various lambdas
+solar_line_fits %>%
+  filter(lambda == solar_line_fits$lambda[3])
+```
+
+```{r}
+# dplyr::select only necessary columns
+solar_line_fits = solar_line_fits %>%
+  dplyr::select(lambda,order_idx,obs_date,snr,a1,lam_c1,depth1,width1,b1)
+solar_line_fits 
+```
+
+## load gh_fits_Vald=0.01_overlapcutoff=3.0e-5_rejectTelluricSlope=10000.csv
+
+```{r}
+read.csv("gh_fits_Vald=0.01_overlapcutoff=8.0e-5_rejectTelluricSlope=10000.csv") %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
+  mutate(lambda = round(lambda,3)) %>%
+  arrange(lambda)
+```
+
+```{r}
+gh_fits1 = read.csv("gh_fits_Vald=0.01_overlapcutoff=3.0e-5_rejectTelluricSlope=10000.csv") %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
+  mutate(lambda = round(lambda,3)) %>%
+  arrange(lambda)
+gh_fits1
+```
+
+## load gh_fits_Vald=0.01_overlapcutoff=3.0e-5_rejectTelluricSlope=10000_DeltaV=6kmps.csv
+
+```{r}
+gh_fits2 = read.csv("gh_fits_Vald=0.01_overlapcutoff=3.0e-5_rejectTelluricSlope=10000_DeltaV=6kmps.csv") %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
+  mutate(lambda = round(lambda,3)) %>%
+  arrange(lambda)
+gh_fits2
+```
+
+## summaries before joining data
+
+For solar_line_fits: there are 765 total lines (lambdas), with 223 observations per line for lines on a single order and 446 for lines on two order. 436 of the lines appear on a single order and 329 of the lines appear on multiple orders.
+
+```{r}
+solar_line_fits %>%
+  group_by(lambda) %>%
+  summarize(num = n())
+
+solar_line_fits %>%
+  group_by(lambda) %>%
+  summarize(num = n()) %>%
+  count(num)
+```
+
+For gh_fits1: there are 248 total lines (lambdas), with 138 observations per line for lines on a single order and 276 for lines on two order. 176 of the lines appear on a single order and 72 of the lines appear on multiple orders.
+
+```{r}
+gh_fits1 %>%
+  group_by(lambda) %>%
+  summarize(num = n())
+gh_fits1 %>%
+  group_by(lambda) %>%
+  summarize(num = n()) %>%
+  count(num)
+```
+
+For gh_fits2: there are 248 total lines (lambdas), with 147 observations per line for lines on a single order and 294 for lines on two order. 176 of the lines appear on a single order and 72 of the lines appear on multiple orders.
+
+```{r}
+gh_fits2 %>%
+  group_by(lambda) %>%
+  summarize(num = n())
+gh_fits2 %>%
+  group_by(lambda) %>%
+  summarize(num = n()) %>%
+  count(num)
+```
+
+
+Look at set operations on the lambdas in gh_fits and lambdas in solar_line_fits
+
+
+```{r}
+# get all unique lines in gh_fits1 and solar_line_fits
+gh_lambdas = ( gh_fits1 %>% group_by(lambda) %>% summarize(num = n()) )$lambda
+solar_lambdas = ( solar_line_fits %>% group_by(lambda) %>% summarize(num = n()) )$lambda
+# 0 lines appear in gh_fits1 but not solar_line_fits
+length( setdiff(gh_lambdas,solar_lambdas) )
+# 517 lines appear in solar_line_fits but not gh_fits
+length( setdiff(solar_lambdas,gh_lambdas) )
+# 248 lines appear in both solar_line_fits and gh_fits
+length( intersect(solar_lambdas,gh_lambdas) )
+```
+
+```{r}
+# get all unique lines in gh_fits2 and solar_line_fits
+gh_lambdas = ( gh_fits2 %>% group_by(lambda) %>% summarize(num = n()) )$lambda
+solar_lambdas = ( solar_line_fits %>% group_by(lambda) %>% summarize(num = n()) )$lambda
+# 0 lines appear in gh_fits2 but not solar_line_fits
+length( setdiff(gh_lambdas,solar_lambdas) )
+# 517 lines appear in solar_line_fits but not gh_fits2
+length( setdiff(solar_lambdas,gh_lambdas) )
+# 248 lines sappear in both solar_line_fits and gh_fits2
+length( intersect(solar_lambdas,gh_lambdas) )
+```
+
+## join solar_line_fits and gh_fits
+
+we use gh_fits1 (10 kmps) and gh_fits2 (6 kmps) here to create two csv files
+
+```{r}
+# create a final dataframe by joining gh_fits and solar_line_fits
+final_fits_6kmps = gh_fits2 %>%
+  inner_join(solar_line_fits, by = c("obs_date","lambda","order_idx"))
+final_fits_6kmps
+```
+
+```{r}
+# create a final dataframe by joining gh_fits and solar_line_fits
+final_fits_10kmps = gh_fits1 %>%
+  inner_join(solar_line_fits, by = c("obs_date","lambda","order_idx"))
+final_fits_10kmps
+```
+
+
+## line summaries of final_fits
+
+For final_fits10kmps: there are  248 total lines (lambdas), with 138 observations per line for lines on a single order and 276 for lines on two order. 176 of the lines appear on a single order, 72 of the lines appear on two orders
+
+```{r}
+final_fits_10kmps %>%
+  group_by(lambda) %>%
+  summarize(n = n())
+final_fits_10kmps %>%
+  group_by(lambda) %>%
+  summarize(n. = n()) %>%
+  count(n.)
+```
+
+320 lambda-order pairs exist
+
+```{r}
+final_fits_10kmps %>%
+  group_by(lambda,order_idx) %>%
+  count()
+```
+
+For final_fits6kmps: there are  248 total lines (lambdas), with 147 observations per line for lines on a single order and 294 for lines on two order. 176 of the lines appear on a single order, 72 of the lines appear on two orders
+
+```{r}
+final_fits_6kmps %>%
+  group_by(lambda) %>%
+  summarize(n = n())
+final_fits_6kmps %>%
+  group_by(lambda) %>%
+  summarize(n. = n()) %>%
+  count(n.)
+```
+
+320 lambda-order pairs exist
+
+```{r}
+final_fits_6kmps %>%
+  group_by(lambda,order_idx) %>%
+  count()
+```
+
+
+## add columns to final_fits (RV and repeat_orders)
+
+### 10kmps
+
+```{r}
+# which lambdas appear in more than 1 order?
+repeat_lambdas10kmps = final_fits_10kmps %>%
+    group_by(lambda) %>%
+    summarize(n_order = length(unique(order_idx))) %>%
+    filter(n_order > 1) %>%
+    dplyr::select(lambda)
+repeat_lambdas10kmps
+```
+
+```{r}
+# add logical col repeat_order, true if line id appears in more than 2 orders else false
+final_fits_10kmps = final_fits_10kmps %>%
+  mutate(repeat_order = ifelse( lambda %in% repeat_lambdas10kmps$lambda, T, F) ) 
+final_fits_10kmps
+```
+
+add RV calculations
+
+```{r}
+# speed of light
+c_light = 299792458
+# add in RV estimate
+final_fits_10kmps = final_fits_10kmps %>%
+  mutate(rv = c_light*(lam_c1-lambda)/lambda)
+```
+
+```{r}
+write.csv(final_fits_10kmps, str_c(wd_data, "final_fits_10kmps.csv"), row.names=FALSE)
+```
+
+### 6kmps
+
+```{r}
+# which lambdas appear in more than 1 order?
+repeat_lambdas6kmps = final_fits_6kmps %>%
+    group_by(lambda) %>%
+    summarize(n_order = length(unique(order_idx))) %>%
+    filter(n_order > 1) %>%
+    dplyr::select(lambda)
+repeat_lambdas6kmps
+```
+
+```{r}
+# add logical col repeat_order, true if line id appears in more than 2 orders else false
+final_fits_6kmps = final_fits_6kmps %>%
+  mutate(repeat_order = ifelse( lambda %in% repeat_lambdas6kmps$lambda, T, F) ) 
+final_fits_6kmps
+```
+
+add RV calculations
+
+```{r}
+# speed of light
+c_light = 299792458
+# add in RV estimate
+final_fits_6kmps = final_fits_6kmps %>%
+  mutate(rv = c_light*(lam_c1-lambda)/lambda)
+```
+
+```{r}
+write.csv(final_fits_6kmps, str_c(wd_data, "final_fits_6kmps.csv"), row.names=FALSE)
+```
+
+```{r}
+# remove unnecessary dataframes
+rm(gh_fits1,gh_fits2,repeat_lambdas6kmps,repeat_lambdas10kmps,repeat_lambdas,solar_line_fits,gh_lambdas,solar_lambdas,c_light, line_fits, pixel.df)
+```
+
+
+
