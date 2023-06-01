@@ -19,26 +19,23 @@ library(glmnet)
 
 ```{r}
 ## Data directory
-wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
+wd_data = "/Users/josephsalzer/research/exostat/"
 ```
-
-
 
 # Loading data
 
 ```{r}
-final_fits = tibble( read.csv(str_c(wd_data, "final_fits.csv") ) ) %>%
-  mutate(obs_date = as.Date(obs_date)) %>%
-  mutate( lambda = factor(round(lambda,3)) )
+final_fits = tibble( read.csv(str_c(wd_data, "final_fits_6kmps.csv") ) ) %>%
+  mutate( obs_date = as.Date(obs_date) ) %>%
+  mutate( lambda = factor(lambda) )
 final_fits
 ```
 
-
+REMOVE OUTLIER LINES
 
 ```{r}
-# list of lambdas in final_fits
-final_lams = ( final_fits %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
-length(final_lams)
+final_fits = final_fits %>%
+  filter(lambda != 4662.822)
 ```
 
 # linear models
@@ -48,6 +45,7 @@ standardize final_fits (except for rv,lambda,order_idx,obs_date, and repeat_orde
 also, add a column for centered rv by line
 
 ```{r}
+# scale non-categorical variables and combine datasets
 scaled_final_fits = cbind(
   final_fits %>% dplyr::select(c(rv,lambda,order_idx,obs_date,repeat_order)),
   
@@ -56,7 +54,9 @@ scaled_final_fits = cbind(
     scale() %>%
     as_tibble()
 )
+```
 
+```{r}
 # convert lambda, date, and order_idx to factors remove repeat_orders
 # also create column of centered rv by lambda 
 scaled_final_fits = scaled_final_fits %>%
@@ -72,6 +72,12 @@ scaled_final_fits = scaled_final_fits %>%
 ```{r}
 scaled_final_fits
 scaled_final_fits %>% dplyr::select(lambda, rv, centered_rv)
+```
+
+```{r}
+# list of lambdas in final_fits
+final_lams = ( scaled_final_fits %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
+length(final_lams)
 ```
 
 ## model 0 (date, time, order dependence no intercept)
@@ -383,7 +389,7 @@ centered_rv = ( scaled_final_fits %>% drop_na() )$centered_rv
 
 ```{r}
 # placeholder lm model to find out which categories are non-singular
-lm.test = lm(centered_rv ~ lambda + order_idx + obs_date, data = scaled_final_fits )
+lm.test = lm(( scaled_final_fits %>% drop_na() )$rv ~ lambda + order_idx + obs_date, data = scaled_final_fits )
 ```
 
 ```{r}
@@ -421,29 +427,30 @@ n.cat
 
 ```{r}
 # cv lasso, penalty factor means we only have penalties on non-categorical vars
-cv_model = cv.glmnet(Xlasso, 
+cv_model1 = cv.glmnet(Xlasso, 
                      centered_rv,
                      penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
                      alpha = 1)
 ```
 
 ```{r}
-cv_model$lambda.min
-plot(cv_model)
+cv_model1$lambda.min
+cv_model1$lambda.1se
+plot(cv_model1)
 ```
 
 ```{r}
 # create the best model using the min lambda
-best.model = glmnet(Xlasso, 
+best.model1 = glmnet(Xlasso, 
                      centered_rv,
                      penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
                      alpha = 1,
-                     lambda = cv_model$lambda.min)
+                     lambda = cv_model1$lambda.1se)
 ```
 
 ```{r}
 # look at coeficients of non-cat vars
-head( coef(best.model), n.covar + 1 )
+head( coef(best.model1), n.covar + 1 )
 ```
 
 
@@ -696,12 +703,12 @@ for (day in final_days) {
   test = scaled_final_fits %>% filter(obs_date == day) %>% drop_na()
   
   # linear model on training data
-  lm.train = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+  lm.train = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
     gh_0 + gh_10, train )
   
   # get the data matrix of our test dataset
-  Xtest = model.matrix(rv ~ lambda*b1 + order_idx + b1 + gh_3 + gh_2 + gh_5 + 
+  Xtest = model.matrix(centered_rv ~ lambda*b1 + order_idx + b1 + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
     gh_0 + gh_10, test)
   
@@ -715,7 +722,7 @@ for (day in final_days) {
   
   # create temp dataframe with predicted rv, true rv, lambda, obs date, order, and original snr
   temp = tibble( pred_rv = Xtest %*% model_coefs, 
-                 true_rv = test$rv,
+                 true_rv = test$centered_rv,
                  lambda = test$lambda,
                  obs_date = test$obs_date,
                  order_idx = test$order_idx,
@@ -730,6 +737,16 @@ for (day in final_days) {
 }
 ```
 
+
+```{r}
+# save pred.df
+write.csv(pred.df, str_c(wd_data, "cv_pred.csv"), row.names=FALSE)
+```
+
+```{r}
+# read pred.df
+pred.df = read.csv(str_c(wd_data, "cv_pred.csv"))
+```
 
 ```{r}
 pred.df
@@ -783,6 +800,10 @@ err.quantiles
 tail.df = pred.df %>% filter(pred_error < err.quantiles[1] | pred_error > err.quantiles[5])
 ```
 
+```{r}
+tail.df
+```
+
 
 ```{r}
 length( unique(tail.df$lambda) )
@@ -790,8 +811,8 @@ length( unique(tail.df$order_idx) )
 length( unique(tail.df$obs_date) )
 ```
 
-123 (out of 245) lines appear in the tail of the distribution
-60 (out of 69) orders appear in the tail of the distribution
+134 (out of 247) lines appear in the tail of the distribution
+63 (out of 70) orders appear in the tail of the distribution
 every date appears in the tail of the distribution
 
 Bar graph of how many times a specific line appears in the tails of the prediction error distribution
@@ -804,14 +825,10 @@ tail.df %>%
         axis.ticks = element_blank() )
 ```
 
-Which lambdas appear in tail more than 200 times:
+Which lambdas appear in tail more than 150 times:
 ```{r}
-bad_lams = ( tail.df %>% group_by(lambda) %>% summarize(n = n()) %>% filter(n > 200) )$lambda
+bad_lams = ( tail.df %>% group_by(lambda) %>% summarize(n = n()) %>% filter(n > 150) )$lambda
 bad_lams 
-```
-
-```{r}
-tail.df
 ```
 
 ```{r}
@@ -832,10 +849,14 @@ pred.df %>%
   ggplot(mapping = aes(x = snr, color = isTail)) +
   geom_density()
 ```
+```{r}
+print(bad_lams)
+```
+4294.734 4459.485 4584.393 4845.84  4888.541
 
 #### Influential lines
 
-Let's remove the 3 "bad" lambdas and see how much we improve our model:
+Let's remove the 4 "bad" lambdas and see how much we improve our model:
 
 ```{r}
 lm.cv = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
@@ -847,7 +868,7 @@ lm.cv = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 +
 summary(lm.cv)$sigma
 ```
 
-*compared to 4.861163*
+*compared to 4.876027*
 
 ```{r}
 lm.cv = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
@@ -858,8 +879,42 @@ lm.cv = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + g
 ```{r}
 summary(lm.cv)$sigma
 ```
-*compared to 4.385977*
+*compared to 4.421432*
 
+```{r}
+# dataframe of coefficients
+coef.df = tibble( coef = rownames(summary(lm.cv)$coefficients),
+                  estimate = summary(lm.cv)$coefficients[,1],
+                  se = summary(lm.cv)$coefficients[,2],
+                  pval = summary(lm.cv)$coefficients[,4] )
+```
+
+
+```{r}
+coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
+```
+```{r}
+coef.df %>% 
+  filter( startsWith( coef, "lambda") ) %>%
+  filter( !endsWith( coef, "b1") )
+```
+
+
+```{r}
+coef.df %>% 
+  filter( startsWith( coef, "lambda") ) %>%
+  filter( !endsWith( coef, "b1") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  #geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
+```
 
 ```{r}
 set.seed(456)
@@ -886,12 +941,13 @@ test$pred_rv = predict(lm.train, newdata = test)
 test$predSE = (test$pred_rv-test$centered_rv)^2
 test$predAE = abs(test$pred_rv-test$centered_rv)
 ```
+
 ```{r}
 sqrt( mean( (test$centered_rv - test$pred_rv)^2 ) )
 mean( abs(test$centered_rv - test$pred_rv) )
 ```
 
-*compared ~roughly~ to 4.473138 and 2.454458*
+*compared ~roughly~ to 4.749467 and 2.437717*
 
 ```{r}
 #png(filename="crossval_8020.png", width=1000, height=500)
@@ -905,6 +961,7 @@ test %>%
 ```{r}
 rm(pred.df, test, train, Xtest, day.num, model_coefs, lm.train)
 ```
+
 
 
 
