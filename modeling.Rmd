@@ -26,8 +26,9 @@ wd_data = "/Users/josephsalzer/research/exostat/"
 
 ```{r}
 final_fits = tibble( read.csv(str_c(wd_data, "final_fits_6kmps.csv") ) ) %>%
-  mutate( obs_date = as.Date(obs_date) ) %>%
-  mutate( lambda = factor(lambda) )
+  rename( wavelength = lambda ) %>%
+  mutate( obs_date = factor(obs_date), wavelength = round(wavelength,3), lam_order = factor( str_c(wavelength,"-",order_idx) ) ) %>%
+  mutate( lambda = factor(wavelength), order_idx = factor(order_idx) )
 final_fits
 ```
 
@@ -47,10 +48,10 @@ also, add a column for centered rv by line
 ```{r}
 # scale non-categorical variables and combine datasets
 scaled_final_fits = cbind(
-  final_fits %>% dplyr::select(c(rv,lambda,order_idx,obs_date,repeat_order)),
+  final_fits %>% dplyr::select(c(rv,lambda,wavelength,order_idx,lam_order,obs_date,repeat_order)),
   
   final_fits %>%
-    dplyr::select(!c(rv,lambda,order_idx,obs_date,repeat_order)) %>%
+    dplyr::select(!c(rv,lambda,wavelength,order_idx,lam_order,obs_date,repeat_order)) %>%
     scale() %>%
     as_tibble()
 )
@@ -60,9 +61,6 @@ scaled_final_fits = cbind(
 # convert lambda, date, and order_idx to factors remove repeat_orders
 # also create column of centered rv by lambda 
 scaled_final_fits = scaled_final_fits %>%
-  mutate(lambda = factor(lambda),
-         order_idx = factor(order_idx),
-         obs_date = factor(obs_date) ) %>%
   group_by(lambda, order_idx) %>%
   mutate(centered_rv = rv - mean(rv)) %>%
   ungroup() %>%
@@ -83,7 +81,9 @@ length(final_lams)
 ## model 0 (date, time, order dependence no intercept)
 
 ```{r}
-lm0 = lm(centered_rv ~ 0 + b1*lambda + obs_date + order_idx, scaled_final_fits )
+lm0 = lm(rv ~ lambda + obs_date + order_idx, scaled_final_fits )
+summary(lm0)$adj.r.squared
+summary(lm0)$sigma
 ```
 
 *check orders for non-singularities*
@@ -95,29 +95,32 @@ scaled_final_fits %>%
 Graph of the coefficients of this model:
 
 ```{r}
-datecoef.df = tibble( 
-                obs_date = names(lm0$coefficients[ startsWith( names(lm0$coefficients), "obs_date") ]),
-                coef_og = lm0$coefficients[ startsWith( names(lm0$coefficients), "obs_date") ]
-              ) %>%
-              mutate(obs_date = factor(str_sub(obs_date,9)))
-datecoef.df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = obs_date, y = coef_og)) +
-  theme(axis.text.x = element_blank(),
-        axis.ticks = element_blank() )
+# the current linear model to be worked on
+currentlm = lm0
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
+```
+
+
+```{r}
+coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
 ```
 
 ```{r}
-lambdacoef.df = tibble( 
-                lambda = names(lm0$coefficients[ startsWith( names(lm0$coefficients), "lambda") ]),
-                coef_og = lm0$coefficients[ startsWith( names(lm0$coefficients), "lambda") ]
-              ) %>%
-              mutate(lambda = factor(str_sub(lambda,7)))
-lambdacoef.df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = lambda, y = coef_og)) +
-  theme(axis.text.x = element_blank(),
-        axis.ticks = element_blank() )
+coef.df %>% filter( startsWith( coef, "lambda") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
 ```
 
 
@@ -125,14 +128,11 @@ lambdacoef.df %>%
 plot(lm0, which=1:2)
 ```
 
-```{r}
-summary(lm0)$adj.r.squared
-summary(lm0)$sigma
-```
+
 
 
 ```{r}
-rm(lm0, datecoef.df, lambdacoef.df)
+rm(lm0, coef.df, currentlm)
 ```
 
 ## model for rv (chosen stepwise model)
@@ -147,6 +147,27 @@ lm1 = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 +
 summary(lm1)$adj.r.squared
 summary(lm1)$sigma
 ```
+Graph of the coefficients of this model:
+
+```{r}
+# the current linear model to be worked on
+currentlm = lm1
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
+```
+
+
+```{r}
+coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
+```
 
 ```{r}
 plot(lm1,which=1)
@@ -157,7 +178,7 @@ plot(lm1,which=2)
 ```
 
 ```{r}
-rm(lm1)
+rm(lm1,coef.df,currentlm)
 ```
 
 ## model for rv (chosen stepwise model, with interaction between lambda and b1)
@@ -179,6 +200,12 @@ coef.df = tibble( coef = rownames(summary(lm2)$coefficients),
                   estimate = summary(lm2)$coefficients[,1],
                   se = summary(lm2)$coefficients[,2],
                   pval = summary(lm2)$coefficients[,4] )
+```
+
+```{r}
+# obs date coefficients
+coef.df %>%
+  filter( startsWith( coef, "obs_date") )
 ```
 
 ```{r}
@@ -229,6 +256,16 @@ coef.df = tibble( coef = rownames(summary(lm3)$coefficients),
 # non fixed effects coefficients
 coef.df %>%
   filter( !startsWith( coef, "obs_date"), !startsWith( coef, "lambda"), !startsWith( coef, "order_idx")  )
+```
+
+obs date coefficients se
+```{r}
+coef.df %>% 
+  filter( startsWith( coef, "obs_date") ) %>%
+  mutate(CI95 = se*1.96) %>%
+  summarise(mean_CI95 = mean(CI95),
+            mean_se = mean(se) )
+  
 ```
 
 ```{r}
@@ -299,7 +336,7 @@ rm(lm3, coef.df, vif.lm)
 
 ### injecting perturbations in RV
 
-
+#### random noise
 ```{r}
 lmX = lm(rv ~ 0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
@@ -313,7 +350,6 @@ sd(scaled_final_fits$rv)
 ```
 
 for each day add random noise, look at lm of lambda and date fixed effects
-
 
 big perturbation: N(0, 148^2)
 small perturbation: N(0, 10^2)
@@ -333,7 +369,7 @@ pert.df
 
 ```{r}
 # run our models on the perturbed rv's
-lm.pert.small = lm(rv_pert_small ~ 0 obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
+lm.pert.small = lm(rv_pert_small ~ 0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
     gh_0 + gh_10, pert.df)
 lm.pert.big = lm(rv_pert_big ~  0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
@@ -376,6 +412,64 @@ rm(date.pert.coef.df, lm.pert.small, lm.pert.big, pert.df, lmX)
 ```
 
 
+#### random sinusodial noise
+
+```{r}
+# create perturbed df where each day is perturbed a little bit according to a sinusodial wave
+# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
+# sin_date is .1 times the sin of date_num, .1 chosen since 10cm/s rv are what we are looking for
+pert.df = scaled_final_fits %>%
+  group_by(obs_date) %>%
+  mutate(date_num = as.numeric(obs_date)/20,
+         sin_date = 1*sin(date_num)) %>%
+  ungroup() %>%
+  mutate(rv_pert = centered_rv + sin_date)
+pert.df
+```
+
+```{r}
+# graph of perturbation
+pert.df %>%
+  ggplot(mapping = aes(x = obs_date, y = sin_date)) +
+  geom_point() +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) 
+```
+
+```{r}
+lm.pert = lm(rv_pert ~ obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, pert.df)
+```
+
+
+```{r}
+# dataframe of coefficients
+coef.df = tibble( coef = rownames(summary(lm.pert)$coefficients),
+                  estimate = summary(lm.pert)$coefficients[,1],
+                  se = summary(lm.pert)$coefficients[,2],
+                  pval = summary(lm.pert)$coefficients[,4] )
+```
+
+```{r}
+coef.df %>% 
+  filter( startsWith( coef, "obs_date") ) %>%
+  mutate(CI95 = se*1.96) %>%
+  summarise(mean_CI95 = mean(CI95),
+            mean_se = mean(se) )
+```
+
+```{r}
+coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
+  ggplot(mapping = aes(x = coef)) +
+  geom_point(aes(y = estimate)) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  xlab("obs date")
+```
+
+```{r}
+rm(lm.pert,pert.df,coef.df)
+```
 
 
 ## LASSO
@@ -745,7 +839,7 @@ write.csv(pred.df, str_c(wd_data, "cv_pred.csv"), row.names=FALSE)
 
 ```{r}
 # read pred.df
-pred.df = read.csv(str_c(wd_data, "cv_pred.csv"))
+pred.df = read.csv(str_c(wd_data, "neid_solar/cv_pred.csv"))
 ```
 
 ```{r}
@@ -797,7 +891,9 @@ err.quantiles
 
 ```{r}
 # dataframe of tails (5% and 95%) of predictions
-tail.df = pred.df %>% filter(pred_error < err.quantiles[1] | pred_error > err.quantiles[5])
+tail.df = pred.df %>% 
+  filter(pred_error < err.quantiles[1] | pred_error > err.quantiles[5]) %>%
+  mutate(lambda = factor(lambda))
 ```
 
 ```{r}
@@ -853,6 +949,7 @@ pred.df %>%
 print(bad_lams)
 ```
 4294.734 4459.485 4584.393 4845.84  4888.541
+
 
 #### Influential lines
 

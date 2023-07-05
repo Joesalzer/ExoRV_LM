@@ -20,7 +20,7 @@ library(gtools)
 
 ```{r}
 ## Data directory
-wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
+wd_data = "/Users/josephsalzer/research/exostat/"
 ```
 
 
@@ -28,21 +28,27 @@ wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
 
 ```{r}
 final_fits = tibble( read.csv(str_c(wd_data, "final_fits_6kmps.csv") ) ) %>%
-  mutate(obs_date = as.Date(obs_date)) %>%
-  #mutate( lambda = factor(round(lambda,3)) ) %>%
-  mutate( order_idx = factor(order_idx))
+  rename( wavelength = lambda ) %>%
+  mutate( obs_date = factor(obs_date),
+          wavelength = round(wavelength,3),
+          lambda = factor(wavelength),
+          order_idx = factor(order_idx),
+          lambda_order = factor( str_c(wavelength,"_",order_idx) ) )
 final_fits
 ```
 
 ```{r}
 # list of lambdas in final_fits
 final_lams = ( final_fits %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
+# list of lambdas in final_fits
+final_lams_orders = ( final_fits %>% group_by(lambda_order) %>% summarize(n. = n()) )$lambda_order
 ```
 
 
 # visuals
 
 ## pairs plots
+
 
 ```{r}
 covar.list = c("gh_0", "gh_2", "gh_3", "gh_4", "gh_5", "gh_6", "gh_7", "gh_8", "gh_9", "gh_10", "gh_11", "gh_12", "snr", "a1", "depth1", "width1", "b1")
@@ -60,10 +66,10 @@ final_fits %>%
   filter(round(lambda,3) == 4662.822) %>%
   dplyr::select(lambda,order_idx,obs_date,gh_0, lam_c1, depth1, rv)
 ```
+
 ```{r}
 summary(final_fits$snr)
 ```
-
 
 ```{r}
 final_fits %>%
@@ -151,14 +157,79 @@ for (i in c(121:136)) {
 ```
 
 
-
-
 Single comparison:
 
 ```{r}
 final_fits %>%
   ggplot() +
   geom_point(mapping = aes(x = depth1, y = width1, color = lambda))
+```
+
+
+## scatter plots depth for two lines correlation
+
+#"5248.496_57"
+#final_lams_orders[2]
+#final_lams_orders[120]
+
+```{r}
+lam1 = "5298.152_58"
+lam2 = final_lams_orders[2]
+
+df = final_fits %>%
+  filter( lambda_order == lam1 | lambda_order == lam2 ) %>%
+  pivot_wider(id_cols = "obs_date", names_from = "lambda_order", values_from = "depth1", names_prefix = "depth_")
+
+df %>% ggplot(mapping = aes(x = !!sym( str_c("depth_",lam1) ), y = !!sym( str_c("depth_",lam2) ) ) ) +
+  geom_point()
+
+print( cor( df %>% dplyr::select(!(obs_date)), method = "pearson" )[1,2] )
+print( cor( df %>% dplyr::select(!(obs_date)), method = "spearman")[1,2] )
+```
+
+```{r}
+final_fits %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
+  filter( lambda_order == lam1 | lambda_order == final_lams_orders[2] | lambda_order == "5248.496_57" | lambda_order == final_lams_orders[120]) %>%
+  group_by(lambda_order) %>%
+  mutate(mean_depth = mean(depth1), sd_depth = sd(depth1)) %>%
+  ungroup() %>%
+  mutate(std_depth = (depth1 - mean_depth)/sd_depth  ) %>%
+  ggplot(mapping = aes(x = obs_date, y = std_depth, color = lambda_order)) +
+  geom_point()
+```
+
+```{r}
+lam1 = "9212.524_107"
+lam2 = "9572.503_110"
+
+df = final_fits %>%
+  filter( lambda_order == lam1 | lambda_order == lam2 ) %>%
+  pivot_wider(id_cols = "obs_date", names_from = "lambda_order", values_from = "depth1", names_prefix = "depth_")
+
+df %>% ggplot(mapping = aes(x = !!sym( str_c("depth_",lam1) ), y = !!sym( str_c("depth_",lam2) ) ) ) +
+  geom_point()
+
+print( cor( df %>% dplyr::select(!(obs_date)), method = "pearson" )[1,2] )
+print( cor( df %>% dplyr::select(!(obs_date)), method = "spearman")[1,2] )
+```
+
+```{r}
+final_fits %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
+  filter( lambda_order == lam1 | lambda_order == lam2 |lambda_order == "9292.992_108" ) %>%
+  group_by(lambda_order) %>%
+  mutate(mean_depth = mean(depth1), sd_depth = sd(depth1)) %>%
+  ungroup() %>%
+  mutate(std_depth = (depth1 - mean_depth)/sd_depth  ) %>%
+  ggplot(mapping = aes(x = obs_date, y = std_depth, color = lambda_order)) +
+  geom_point()
+```
+
+
+
+```{r}
+rm(lam1,lam2,df)
 ```
 
 
@@ -391,7 +462,7 @@ k = 10
 
 plot1 = final_fits %>%
   filter(lambda==final_lams[k]) %>%
-  ggplot(mapping = aes(x = obs_date, y = a1, color = factor(order_idx))) +
+  ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
   ggtitle(final_lams[k]) +
   geom_point()
 
@@ -414,7 +485,7 @@ k = 50
 
 plot1 = final_fits %>%
   filter(lambda==final_lams[k]) %>%
-  ggplot(mapping = aes(x = obs_date, y = a1, color = factor(order_idx))) +
+  ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
   ggtitle(final_lams[k]) +
   geom_point()
 
@@ -462,7 +533,7 @@ k = 150
 
 plot1 = final_fits %>%
   filter(lambda==final_lams[k]) %>%
-  ggplot(mapping = aes(x = obs_date, y = a1, color = factor(order_idx))) +
+  ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
   ggtitle(final_lams[k]) +
   geom_point()
 
@@ -486,7 +557,7 @@ k = 240
 
 plot1 = final_fits %>%
   filter(lambda==final_lams[k]) %>%
-  ggplot(mapping = aes(x = obs_date, y = a1, color = factor(order_idx))) +
+  ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
   ggtitle(final_lams[k]) +
   geom_point()
 

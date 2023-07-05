@@ -12,8 +12,6 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(stringr)
 library(readxl)
-library(lme4)
-library(MASS)
 library(gridExtra)
 ```
 
@@ -28,7 +26,7 @@ wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
 ## pixels
 
 
-*REMINDER: look at lambda-order pairs for finding middle pixle*
+*REMINDER: look at lambda-order pairs for finding middle pixel*
 
 ```{r}
 # read in neid_linefinder
@@ -55,14 +53,6 @@ line_fits = line_fits %>%
   summarize(m_pixel = mid_pixel[1]) %>%
   ungroup()
 ```
-```{r}
-# read in neid_linefinder
-line_fits = read_csv(str_c(wd_data, "neid_linefinder_line_fits.csv")) %>%
-  rename(fit_lam_c = "fit_λc",
-         fit_sig2 = "fit_σ²",
-         chi2_per_dof = "χ²_per_dof") %>%
-  dplyr::select(line_id, pixels, chunk_id)
-```
 
 ```{r}
 line_fits
@@ -83,7 +73,7 @@ pixel.df %>%
 ```
 
 ```{r}
-hist(pixel.df$m_pixel)
+#hist(pixel.df$m_pixel)
 ```
 
 ```{r}
