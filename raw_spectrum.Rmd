@@ -1,5 +1,5 @@
 ---
-title: "NEID Solar Data -- v2 data"
+title: "NEID Solar Data -- loading raw spectra"
 author: "Joe Salzer"
 date: "`r Sys.Date()`"
 output: html_document
@@ -15,7 +15,7 @@ library(rhdf5)
 
 ```{r}
 ## Data directory
-wd_data = "/Users/josephsalzer/research/exostat/"
+wd_data = "/Users/josephsalzer/research/exostat/raw_spectrum_files/"
 ```
 
 # Loading data
@@ -23,14 +23,18 @@ wd_data = "/Users/josephsalzer/research/exostat/"
 ## solar_spectrum
 
 ```{r}
+# assign spectrum name
+spectra_name = "solar_spectrum_2021-01-01.h5"
+```
+
+9216 pixels, 122 orders
+```{r}
 # download solar spectrum, with flux, flux_norm, lambda, var, and var_norm
 # (pixels,order_idx)
-solar_spectrum = H5Fopen(str_c(wd_data, "solar_spectrum_ex.h5"))
+solar_spectrum = H5Fopen(str_c(wd_data, spectra_name))
 solar_spectrum
 ```
 
-*flux norm*
-some earlier orders have flux values and later ones dont, this okay?
 ```{r}
 solar_spectrum$flux_norm[1:6,1:10]
 ```
@@ -43,7 +47,8 @@ num_orders = dim(solar_spectrum$flux)[2]
 
 ```{r}
 # vector of orders and pixels
-orders = seq(1,num_orders) %>% map_chr( \(x) str_c("order",x) )
+#orders = seq(1,num_orders) %>% map_chr( \(x) str_c("order",x) )
+orders = seq(1,num_orders)
 pixels = seq(1,num_pixels)
 ```
 
@@ -63,18 +68,12 @@ solar_spectrum.df$var_norm = as.vector(solar_spectrum$var_norm)
 rm(orders, pixels, num_orders, num_pixels)
 ```
 
-```{r}
-solar_spectrum.df
-```
-
 ## pixel lines
 
 ```{r}
-#line_name = "line_5236.09361_57.h5"
+line_name = "line_5286.07101_58.h5"
 
-#line_name = "line_6126.72717_74.h5"
-
-line_name = "line_9864.45699_112.h5"
+#line_name = "line_4966.30631_50.h5"
 ```
 
 ```{r}
@@ -83,15 +82,10 @@ line_name = "line_9864.45699_112.h5"
 single_line = H5Fopen(str_c(wd_data, line_name))
 single_line
 ```
-```{r}
-single_line$pixels
-single_line$order_idx
-single_line$fit_lambdac
-```
 
 ```{r}
 # vector of dates
-dates = single_line$dates
+dates = as.Date(single_line$dates)
 # vector of pixels
 pixels = as.numeric( str_split_1(single_line$pixels,":") )
 pixels = seq(pixels[1],pixels[2])
@@ -108,38 +102,49 @@ single_line.df$var = as.vector( single_line$var)
 single_line.df$var_norm = as.vector( single_line$var_norm) 
 ```
 
+
 ```{r}
-rm(dates, pixels)
+rm(dates)
 ```
 
 ## summaries
 
+###solar_spectrum
+
 ```{r}
-solar_spectrum.df %>% filter(order == "order57",pixel == 2491)
+summary( solar_spectrum.df )
+```
+
+
+### single_line
+
+```{r}
+# central lambda, pixels and order id, deltav?
+single_line$lambdac_fit
+single_line$lambdac_vald
+single_line$pixels
+single_line$order_idx
+single_line$order_phys
+single_line$deltav
 ```
 
 ```{r}
-single_line.df %>% filter(pixel == 2491)
+summary(single_line.df)
 ```
-2021-06-20 is the date for solar_spectrum
 
 # Figures
 
 ## solar spectrum
 
 ###flux (or flux norm) by lambda for a given order
-```{r}
-solar_spectrum.df %>%
-  filter(order == "order52") %>%
-  ggplot(mapping = aes(x = lambda, y = flux)) +
-  geom_point()
-```
 
 ```{r}
 solar_spectrum.df %>%
-  filter(order == "order52") %>%
-  ggplot(mapping = aes(x = lambda, y = flux_norm)) +
-  geom_point()
+  filter(order == single_line$order_idx) %>%
+  #ggplot(mapping = aes(x = lambda, y = flux)) +
+  ggplot(mapping = aes(x = pixel, y = flux)) +
+  geom_point() +
+  ggtitle(str_c("order ",single_line$order_idx))
 ```
 
 
@@ -149,49 +154,73 @@ solar_spectrum.df %>%
 # lower and upper pixel
 pixel_lower = as.numeric( str_split_1(single_line$pixels,":")[1] )
 pixel_upper = as.numeric( str_split_1(single_line$pixels,":")[2] )
+```
 
-ordernum = str_c("order",single_line$order_idx)
+lines on lambdac_fit and lambdac_vald
+
+```{r}
+single_line.df %>%
+  filter(date == "2022-03-22")
 ```
 
 ```{r}
+single_line.df %>%
+  filter(date == "2022-03-22") %>%
+  ggplot() +
+  geom_point(mapping = aes(x=lambda,y=flux_norm)) +
+  geom_vline(xintercept = single_line$lambdac_fit, color = "orange") +
+  geom_vline(xintercept = single_line$lambdac_vald, color = "purple")
+```
+lines on pixels
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-03") %>%
+  ggplot() +
+  geom_point(mapping = aes(x=pixel,y=flux_norm)) +
+  geom_vline(xintercept = 1840, color = "orange") +
+  geom_vline(xintercept = 1855, color = "orange")
+  #geom_vline(xintercept = single_line$lambdac_vald, color = "purple")
+```
+
+
+```{r}
 solar_spectrum.df %>%
-  filter(order == ordernum,
+  filter(order == single_line$order_idx,
          pixel >= pixel_lower - 50,
          pixel <= pixel_upper + 50) %>%
   ggplot(mapping = aes(x = lambda, y = flux_norm)) +
-  geom_vline(xintercept = (solar_spectrum.df %>% filter(order == ordernum,
-                                                        pixel == pixel_lower))$lambda) +
-  geom_vline(xintercept = (solar_spectrum.df %>% filter(order == ordernum,
-                                                        pixel == pixel_upper))$lambda) +
+  geom_vline(xintercept = (single_line.df %>% filter(date == "2021-01-01", pixel == pixel_lower))$lambda) +
+  geom_vline(xintercept = (single_line.df %>% filter(date == "2021-01-01", pixel == pixel_upper))$lambda) +
   geom_point()
 ```
 
 ```{r}
-rm(pixel_lower, pixel_upper, ordernum)
+rm(pixel_lower, pixel_upper)
 ```
 
 ## single line
 
-
 ```{r}
 single_line.df%>%
-  #mutate(date = as.Date(date), date = as.numeric(date)) %>%
-  filter(date == "2021-06-20") %>%
-  ggplot(mapping = aes(x = pixel, y = flux_norm, color = date)) +
-  geom_point()
-```
-
-```{r}
-single_line.df%>%
+  #filter(pixel <= 1855) %>%
+  #filter(pixel >= 1840) %>%
+  filter(pixel == 1855 | pixel == 1854) %>%
   mutate(date = as.Date(date)) %>%
   ggplot(mapping = aes(x = date, y = flux_norm, color = pixel)) +
   geom_point()
 ```
 
-
+## multiple days
 
 ```{r}
+summary(single_line.df$date)
+```
 
+```{r}
+single_line.df %>%
+  filter(date %in% c(as.Date("2021-01-01"),as.Date("2022-04-13"))) %>%
+  ggplot() +
+  geom_point(mapping = aes(x=pixel,y=flux_norm,color=date))
 ```
 
 
