@@ -9,12 +9,11 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(stringr)
-library(readxl)
 library(lme4)
 library(MASS)
 library(gridExtra)
 library(car)
-library(glmnet)
+library(emmeans)
 ```
 
 ```{r}
@@ -25,74 +24,377 @@ wd_data = "/Users/josephsalzer/research/exostat/"
 # Loading data
 
 ```{r}
-final_fits = tibble( read.csv(str_c(wd_data, "final_fits_6kmps.csv") ) ) %>%
-  rename( wavelength = lambda ) %>%
-  mutate( obs_date = factor(obs_date), wavelength = round(wavelength,3), lam_order = factor( str_c(wavelength,"-",order_idx) ) ) %>%
-  mutate( lambda = factor(wavelength), order_idx = factor(order_idx) )
-final_fits
+# get species info for each line
+species_df = read_csv(str_c(wd_data,"neid_solar/","clean_line_info.csv")) %>%
+  dplyr::select(lambda, species, excitation_energy) %>%
+  mutate(lambda = factor( round(lambda,3) ),
+         species = factor(species)) %>%
+  unique()
 ```
-
-REMOVE OUTLIER LINES
 
 ```{r}
-final_fits = final_fits %>%
-  filter(lambda != 4662.822)
+# convert categorical vars to factors
+final_fits = tibble( read.csv(str_c(wd_data, "final_fits_6kmps.csv") ) ) %>%
+  rename( wavelength = lambda ) %>%
+  mutate( obs_date = factor(obs_date), wavelength = round(wavelength,3), lam_order = factor( str_c(wavelength,"_",order_idx) ), lambda = factor(wavelength), order_idx = factor(order_idx))
 ```
 
-# linear models
+```{r}
+# join final fits and species
+model_df = final_fits %>%
+  left_join(species_df, by = "lambda")
+```
 
-standardize final_fits (except for rv,lambda,order_idx,obs_date, and repeat_order)
+```{r}
+# create row of which order has higher snr for repeated lines and a centered rv
+model_df = model_df %>%
+  group_by(lambda, order_idx) %>%
+  # mean snr/depth for a given lambda-order
+  mutate(mean_snr = mean(snr), centered_rv = rv - mean(rv), scale_rv = centered_rv/sd(rv)) %>%
+  ungroup() %>%
+  group_by(lambda) %>%
+  # create max snr for each lambda and is_max_snr for order that is max
+  mutate(max_snr = max(mean_snr),
+         is_max_snr = ifelse(mean_snr == max_snr, T, F)) %>%
+  ungroup() %>%
+  mutate(mean_snr=NULL,max_snr=NULL)
+```
+
+```{r}
+rm(final_fits, species_df)
+```
+
+
+## outlier lines
+
+### constant b1s
+```{r}
+# lambda-orders that have constant b1s
+constant_lamorders = ( model_df %>%
+  group_by(lam_order) %>%
+  summarize(sd_b1 = sd(b1)) %>%
+  filter(sd_b1 == 0) )$lam_order
+constant_lamorders
+```
+
+```{r}
+model_df %>%
+  filter(lam_order %in% constant_lamorders) %>%
+  dplyr::select(lam_order, b1) %>%
+  unique()
+```
+
+```{r}
+# filter out constant b1's
+model_df = model_df %>%
+  filter(! lam_order %in% constant_lamorders)
+```
+
+```{r}
+rm(constant_lamorders)
+```
+
+### outlier lines
+
+*5286.06 has constant rv*
+
+```{r}
+model_df %>%
+  filter(wavelength == 5286.06) %>%
+  summarize(mean_rv = mean(rv),
+            sd_rv = sd(rv))
+```
+
+```{r}
+model_df = model_df %>%
+  filter(!wavelength == 5286.06)
+```
+
+*4662.822 order 43 has na gh coefficients (and outliers for other dates)*
+
+```{r}
+model_df %>%
+  filter( is.na(gh_0) )
+```
+
+```{r}
+model_df = model_df %>%
+  filter(! ( wavelength == 4662.822  & order_idx == 43) )
+```
+
+*outlier rvs*
+
+```{r}
+quantile(model_df$rv,probs=c(.005,.995))
+```
+
+```{r}
+model_df %>%
+  filter(rv < quantile(model_df$rv,probs=c(.005,.995))[1] | rv > quantile(model_df$rv,probs=c(.005,.995))[2]) %>%
+  count(lam_order)
+```
+
+
+```{r}
+quantile(model_df$scale_rv,probs=c(.005,.995))
+```
+
+```{r}
+model_df %>%
+  filter(centered_rv < quantile(model_df$centered_rv,probs=c(.005,.995))[1] |
+         centered_rv > quantile(model_df$centered_rv,probs=c(.005,.995))[2]) %>%
+  count(lam_order)
+```
+
+
+## standardize model_df
 
 also, add a column for centered rv by line
 
 ```{r}
-# scale non-categorical variables and combine datasets
-scaled_final_fits = cbind(
-  final_fits %>% dplyr::select(c(rv,lambda,wavelength,order_idx,lam_order,obs_date,repeat_order)),
+# scale non-categorical (and non-snr) variables and combine datasets
+scaled_model_df = cbind(
+  model_df %>% dplyr::select(c(rv,centered_rv,scale_rv,lambda,wavelength,order_idx,lam_order,obs_date,repeat_order,is_max_snr,species,excitation_energy,snr)),
   
-  final_fits %>%
-    dplyr::select(!c(rv,lambda,wavelength,order_idx,lam_order,obs_date,repeat_order)) %>%
+  model_df %>%
+    dplyr::select(!c(rv,centered_rv,scale_rv,lambda,wavelength,order_idx,lam_order,obs_date,repeat_order,is_max_snr,species,excitation_energy,snr)) %>%
     scale() %>%
     as_tibble()
 )
 ```
 
-```{r}
-# convert lambda, date, and order_idx to factors remove repeat_orders
-# also create column of centered rv by lambda 
-scaled_final_fits = scaled_final_fits %>%
-  group_by(lambda, order_idx) %>%
-  mutate(centered_rv = rv - mean(rv)) %>%
-  ungroup() %>%
-  dplyr::select(!c(repeat_order))
-```
-
-```{r}
-scaled_final_fits
-scaled_final_fits %>% dplyr::select(lambda, rv, centered_rv)
-```
 
 ```{r}
 # list of lambdas in final_fits
-final_lams = ( scaled_final_fits %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
+final_lams = ( scaled_model_df %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
 length(final_lams)
 ```
-
-## model 0 (date, time, order dependence no intercept)
-
 ```{r}
-lm0 = lm(rv ~ lambda + obs_date + order_idx, scaled_final_fits )
-summary(lm0)$adj.r.squared
-summary(lm0)$sigma
+# list of lambda-orders in final_fits
+final_lams_orders = ( scaled_model_df %>% group_by(lam_order) %>% summarize(n. = n()) )$lam_order
+length(final_lams_orders)
 ```
 
-*check orders for non-singularities*
+# Data summaries
+
 ```{r}
-scaled_final_fits %>%
-  filter(order_idx == 21)
+# check how many line-order pairs there are
+model_df %>%
+  group_by(lambda, order_idx) %>%
+  count()
+```
+there are 310 line-order pairs, 147 observations per line-order pair
+
+```{r}
+summary(model_df)
 ```
 
-Graph of the coefficients of this model:
+```{r}
+summary(scaled_model_df)
+```
+
+# PCA
+
+## odd pca
+
+```{r}
+odd_gh = model_df[ str_c( "gh_", as.character( seq(1,12,2) ) ) ]
+odd_gh
+```
+
+
+```{r}
+pairs(odd_gh)
+```
+
+```{r}
+pcaOdd = prcomp(odd_gh, center = T, scale = T, retx = T)
+```
+
+
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = pcaOdd$sdev^2 / sum(pcaOdd$sdev^2)
+var_explained
+```
+
+```{r}
+# first two pcs
+100*sum(var_explained[1:2])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained")
+```
+
+
+```{r}
+rm(odd_gh,var_explained)
+```
+
+## even pca
+
+```{r}
+even_gh = model_df[ str_c( "gh_", as.character( seq(0,12,2) ) ) ]
+even_gh
+```
+
+```{r}
+pairs(even_gh)
+```
+
+```{r}
+pcaEven = prcomp(even_gh, center =T, scale =T, retx = T)
+```
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = pcaEven$sdev^2 / sum(pcaEven$sdev^2)
+var_explained
+```
+
+```{r}
+# first two pcs
+100*sum(var_explained[1:2])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained")
+```
+
+```{r}
+rm(even_gh,var_explained)
+```
+
+## all pca
+
+```{r}
+all_gh = model_df[ str_c( "gh_", as.character( seq(0,12,1) ) ) ]
+all_gh
+```
+
+```{r}
+pairs(all_gh)
+```
+
+```{r}
+pcaAll = prcomp(all_gh, center = T, scale = T, retx = T)
+```
+
+
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = pcaAll$sdev^2 / sum(pcaAll$sdev^2)
+var_explained
+```
+
+[1] 2.939953e-01 2.746899e-01 1.281260e-01 1.103584e-01 8.544195e-02 5.719039e-02 3.963027e-02 8.060240e-03 2.380122e-03
+[10] 1.064871e-04 2.067538e-05 2.533699e-07 3.258822e-08
+
+```{r}
+# first four pcs
+100*sum(var_explained[1:5])
+```
+
+89.93765
+
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained")
+```
+
+```{r}
+rm(all_gh,var_explained)
+```
+
+## add pcs to dataframes
+
+```{r}
+# get pcs from each model
+oddPCs = pcaOdd$x
+evenPCs = pcaEven$x
+allPCs = pcaAll$x
+```
+
+```{r}
+# modify column names
+colnames(oddPCs) = str_c( "odd_", colnames(oddPCs) )
+colnames(evenPCs) = str_c( "even_", colnames(evenPCs) )
+colnames(allPCs) = str_c( "all_", colnames(allPCs) )
+```
+
+```{r}
+# add columns to our dataframes
+scaled_model_df = cbind(scaled_model_df, oddPCs, evenPCs, allPCs)
+model_df = cbind(model_df, oddPCs, evenPCs, allPCs)
+```
+
+
+```{r}
+rm(allPCs, evenPCs, oddPCs, pcaAll, pcaEven, pcaOdd)
+```
+
+# linear models
+
+## model weighted 
+
+
+```{r}
+scaled_model_df
+```
+
+```{r}
+# add median snr for every line-order into the scaled dataframe
+scaled_model_df = scaled_model_df %>%
+  group_by(lam_order) %>%
+  mutate( med_snr = median(snr) ) %>%
+  ungroup()
+```
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date , scaled_model_df)
+```
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date , scaled_model_df, weights = snr^2)
+```
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date , scaled_model_df, weights = med_snr^2)
+```
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data=scaled_model_df ) 
+```
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data=scaled_model_df, weights = med_snr^2 ) 
+```
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data=scaled_model_df, weights = snr^2 ) 
+```
+
 
 ```{r}
 # the current linear model to be worked on
@@ -104,16 +406,193 @@ coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
                   pval = summary(currentlm )$coefficients[,4] )
 ```
 
+```{r}
+# get emmeans 
+emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
+```
+
 
 ```{r}
+emmean.summary %>%
+  ggplot() +
+  geom_histogram(mapping = aes(emmean))
+```
+
+
+```{r}
+emmean.summary %>%
+  ggplot() +
+  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
+  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
+  geom_hline(yintercept = 0, color = "red")
+```
+```{r}
+sd(emmean.summary$emmean)
+```
+
+```{r}
+ggplot() +
+  geom_density(mapping = aes(x = currentlm$residuals))
+
+summary(currentlm$residuals)
+```
+
+```{r}
+sqrt( sum(currentlm$residuals^2)/( nrow(scaled_model_df)  - 45101 ) )
+```
+
+
+```{r}
+plot(currentlm,which=1)
+```
+
+```{r}
+plot(currentlm,which=2)
+```
+
+
+```{r}
+# R2 of model
+summary(currentlm)$adj.r.squared
+# rse of model
+summary(currentlm)$sigma
+# se on date emmean
+mean( emmean.summary$SE )
+# how many dates are statistically different than 0 (95% confidence)
+sum( !(emmean.summary$lower.CL <= 0 & emmean.summary$upper.CL >= 0) )
+```
+
+
+Response: centered rv
+
+  Model: lam_order + obs_date (no weight)
+    R^2 = 0.002085831
+    RSE = 12.09085
+    se on date emmean = 0.6867143
+    number of dates that are statistically different than 0 (95% CI) = 36
+    
+  Model: lam_order + obs_date (med snr^2 weight)
+    R^2 = 0.008960191
+    RSE = 1511107 ***
+    se on date emmean = 1.47265
+    number of dates that are statistically different than 0 (95% CI) = 5
+  
+  Model: lam_order + obs_date (snr^2 weight)
+    R^2 = 0.01162692
+    RSE = 1475669 ***
+    se on date emmean = 1.465805
+    number of dates that are statistically different than 0 (95% CI) = 5
+    
+  Model: full model (no weight)
+    R^2 = 0.8342954
+    RSE = 4.926944
+    se on date emmean = 0.2800749
+    number of dates that are statistically different than 0 (95% CI) = 11
+    
+  Model: full model (med snr^2 weight)
+    R^2 = 0.8073926
+    RSE = 666171.7 ***
+    se on date emmean = 0.6493029
+    number of dates that are statistically different than 0 (95% CI) = 0
+  
+  Model: full model (snr^2 weight)
+    R^2 = 0.8061024
+    RSE = 653604.1 ***
+    se on date emmean = 0.6493199
+    number of dates that are statistically different than 0 (95% CI) = 0
+  
+    
+
+```{r}
+rm(lm0, coef.df, currentlm, emmean.summary)
+```
+
+## model 0 (date,  lam-order dependence)
+
+```{r}
+lm0 = lm(centered_rv ~ lam_order + obs_date , scaled_model_df)
+```
+
+```{r}
+# the current linear model to be worked on
+currentlm = lm0
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
+```
+
+```{r}
+summary(currentlm)$adj.r.squared
+summary(currentlm)$sigma
+mean( ( coef.df %>% filter( startsWith( coef, "obs_date") ) )$se )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .05) )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .01) )
+```
+
+```{r}
+rm(lm0, coef.df, currentlm)
+```
+
+## model 1 (date, time, order dependence)
+
+```{r}
+lm0 = lm(centered_rv ~ lambda + obs_date + order_idx, scaled_model_df )
+```
+
+```{r}
+# the current linear model to be worked on
+currentlm = lm0
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
+```
+
+```{r}
+summary(currentlm)$adj.r.squared
+summary(currentlm)$sigma
+mean( ( coef.df %>% filter( startsWith( coef, "obs_date") ) )$se )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .05) )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .01) )
+```
+
+rv
+  adj.r.squared: 0.9928275
+  sigma: 12.28179
+  se on date: 0.9864971
+  95% date: 18
+  99% date: 11
+centered_rv
+  adj.r.squared: 0.002726894
+  sigma: 12.08697
+  se on date: 0.9708487
+  95% date: 19
+  99% date: 11  
+
+
+```{r}
+#summary(lm0)
+```
+
+*some orders are non-singular, since these orders have only a single lambda associated with it*
+
+Graph of the coefficients of this model:
+
+plot of time fixed effects with 95% CI
+```{r}
 coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
-  ggplot(mapping = aes(x = coef)) +
-  geom_point(aes(y = estimate)) +
+  mutate(date = as.Date(str_sub(coef, 9))) %>%
+  ggplot(mapping = aes(x = date)) +
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se), color = "black") +
+  geom_point(aes(y = estimate), color = "black") +
   theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
-  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
   geom_hline(yintercept = 0, color = "red")
 ```
 
+plot of lambda fixed effects with 95% CI
 ```{r}
 coef.df %>% filter( startsWith( coef, "lambda") ) %>%
   ggplot(mapping = aes(x = coef)) +
@@ -123,13 +602,9 @@ coef.df %>% filter( startsWith( coef, "lambda") ) %>%
   geom_hline(yintercept = 0, color = "red")
 ```
 
-
 ```{r}
 plot(lm0, which=1:2)
 ```
-
-
-
 
 ```{r}
 rm(lm0, coef.df, currentlm)
@@ -138,16 +613,15 @@ rm(lm0, coef.df, currentlm)
 ## model for rv (chosen stepwise model)
 
 ```{r}
-lm1 = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data=scaled_final_fits)
+lm1 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data=scaled_model_df) 
 ```
 
 ```{r}
-summary(lm1)$adj.r.squared
-summary(lm1)$sigma
+# get emmeans 
+emmean.summary = summary( emmeans(lm1, "obs_date", nuisance = "lam_order") )
 ```
-Graph of the coefficients of this model:
 
 ```{r}
 # the current linear model to be worked on
@@ -161,11 +635,50 @@ coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
 
 
 ```{r}
-coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
-  ggplot(mapping = aes(x = coef)) +
-  geom_point(aes(y = estimate)) +
-  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
-  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+summary(currentlm)$adj.r.squared
+summary(currentlm)$sigma
+mean( ( coef.df %>% filter( startsWith( coef, "obs_date") ) )$se )
+```
+
+rv
+  adj.r.squared: 0.998569
+  sigma: 5.485784
+  se on date: 0.4411808
+
+no weights no snr centered_rv
+  adj.r.squared: 0.823567
+  sigma: 4.926944
+  se on date: 0.395972
+
+weights (1/snr^2) - replaced with median centered_rv
+  [1] 0.8470446
+  [1] 5.150392
+  [1] 0.3804311
+  
+weights (1/snr^2) centered_rv
+  [1] 0.9928565
+  [1] 32.66342
+  [1] 0.2149328
+
+weights (1/snr) centered_rv
+  [1] 0.791654
+  [1] 0.04424856
+  [1] 0.6053361
+
+Graph of the coefficients of this model:
+
+```{r}
+emmean.summary %>%
+  ggplot() +
+  geom_histogram(mapping = aes(emmean))
+```
+
+
+```{r}
+emmean.summary %>%
+  ggplot() +
+  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
+  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
   geom_hline(yintercept = 0, color = "red")
 ```
 
@@ -178,45 +691,55 @@ plot(lm1,which=2)
 ```
 
 ```{r}
-rm(lm1,coef.df,currentlm)
+rm(lm1,emmean.summary,currentlm,coef.df)
 ```
 
-## model for rv (chosen stepwise model, with interaction between lambda and b1)
+## model for rv (PCs)
 
 ```{r}
-lm2 = lm(rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data = scaled_final_fits)
-```
-
-```{r}
-summary(lm2)$adj.r.squared
-summary(lm2)$sigma
+lm2 = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + depth1 + a1 + width1
+         + even_PC1 +even_PC2 + odd_PC1 + odd_PC2, data = scaled_model_df)
 ```
 
 ```{r}
-# dataframe of coefficients
-coef.df = tibble( coef = rownames(summary(lm2)$coefficients),
-                  estimate = summary(lm2)$coefficients[,1],
-                  se = summary(lm2)$coefficients[,2],
-                  pval = summary(lm2)$coefficients[,4] )
+# the current linear model to be worked on
+currentlm = lm2
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
 ```
 
 ```{r}
-# obs date coefficients
-coef.df %>%
-  filter( startsWith( coef, "obs_date") )
+summary(currentlm)$adj.r.squared
+summary(currentlm)$sigma
+mean( ( coef.df %>% filter( startsWith( coef, "obs_date") ) )$se )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .05) )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .01) )
 ```
 
-```{r}
-# non fixed effects coefficients
-coef.df %>%
-  filter( !startsWith( coef, "obs_date"), !startsWith( coef, "lambda"), !startsWith( coef, "order_idx")  )
-```
+rv
+  adj.r.squared: 0.9991638
+  sigma: 4.193427
+  se on date: 0.3383594
+  95% date: 8
+  99% date: 6
+centered_rv
+  adj.r.squared: 0.9079108
+  sigma: 3.672947
+  se on date: 0.2963629
+  95% date: 6
+  99% date: 3
+
+
+
+Graph of the coefficients of this model:
 
 ```{r}
 coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
-  ggplot(mapping = aes(x = coef)) +
+  mutate(date = as.Date(str_sub(coef, 9))) %>%
+  ggplot(mapping = aes(x = date)) +
   geom_point(aes(y = estimate)) +
   theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
   geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
@@ -228,66 +751,74 @@ plot(lm2,which=1:2)
 ```
 
 ```{r}
-rm(lm2)
+rm(lm2,coef.df,currentlm)
 ```
 
-## model for centered rv (chosen stepwise model, with interaction between lambda and b1)
+## model for rv (chosen stepwise with b1 lam interaction)
 
 ```{r}
-lm3 = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data = scaled_final_fits)
-```
-
-```{r}
-summary(lm3)$adj.r.squared
-summary(lm3)$sigma
+lm3 = lm(centered_rv ~ lam_order*b1 + obs_date + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, data = scaled_model_df)
 ```
 
 ```{r}
-# dataframe of coefficients
-coef.df = tibble( coef = rownames(summary(lm3)$coefficients),
-                  estimate = summary(lm3)$coefficients[,1],
-                  se = summary(lm3)$coefficients[,2],
-                  pval = summary(lm3)$coefficients[,4] )
+# the current linear model to be worked on
+currentlm = lm3
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
 ```
 
 ```{r}
-# non fixed effects coefficients
-coef.df %>%
-  filter( !startsWith( coef, "obs_date"), !startsWith( coef, "lambda"), !startsWith( coef, "order_idx")  )
+summary(currentlm)$adj.r.squared
+summary(currentlm)$sigma
+mean( ( coef.df %>% filter( startsWith( coef, "obs_date") ) )$se )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .05) )
+nrow( coef.df %>% filter( startsWith( coef, "obs_date") ) %>% filter(pval < .01) )
 ```
 
-obs date coefficients se
-```{r}
-coef.df %>% 
-  filter( startsWith( coef, "obs_date") ) %>%
-  mutate(CI95 = se*1.96) %>%
-  summarise(mean_CI95 = mean(CI95),
-            mean_se = mean(se) )
+centered_rv
+  adj.r.squared: 0.9144562
+  sigma: 3.540011
+  se on date: 0.2866338
+  95% date: 8
+  99% date: 1
   
-```
+weights
+  [1] 0.9951118
+  [1] 27.01967
+  [1] 0.1867471
+  [1] 142
+  [1] 136
+
+
+Graph of the coefficients of this model:
 
 ```{r}
 coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
-  ggplot(mapping = aes(x = coef)) +
+  mutate(date = as.Date(str_sub(coef, 9))) %>%
+  ggplot(mapping = aes(x = date)) +
   geom_point(aes(y = estimate)) +
   theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
-  geom_errorbar(aes(ymin = estimate - se, ymax = estimate + se))
+  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+  geom_hline(yintercept = 0, color = "red")
 ```
 
 ```{r}
-plot(lm3,which=1:2)
+rm(lm3,coef.df,currentlm)
 ```
 
-### Variance inflation factor
+# Variance inflation factor
 
 ```{r, eval = F}
 # removing non-singularities from lm above
 vif.df = 
   as_tibble( model.matrix(~ centered_rv + lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data = scaled_final_fits) ) %>%
+    gh_0 + gh_10, data = scaled_model_df) ) %>%
   dplyr::select(!attributes(alias(lm3)$Complete)$dimnames[[1]]) %>%
   dplyr::select(!"(Intercept)")
 
@@ -312,13 +843,13 @@ Instead, remove all categorical (lambda, order_idx, obs_date):
 
 ```{r}
 vif.lm = lm(centered_rv ~ b1 + gh_5 + depth1 + a1 + snr  + width1 + 
-    gh_0, data = scaled_final_fits)
+    gh_0, data = scaled_model_df)
  
 t( t( vif(vif.lm) ) )
 ```
 
 ```{r}
-vif.lm = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_1 + gh_2 + gh_4 + gh_3 + gh_5 + depth1 + a1 + snr  + width1 + gh_0, data = scaled_final_fits)
+vif.lm = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_1 + gh_2 + gh_4 + gh_3 + gh_5 + depth1 + a1 + snr  + width1 + gh_0, data = scaled_model_df)
 ```
 
 ```{r}
@@ -328,121 +859,41 @@ summary(vif.lm)$sigma
 
 as expected, most gh coefficients are highly collinear whereas most other covariates are not collinear
 
+```{r}
+summary(scaled_model_df)
+```
 
 ```{r}
 rm(lm3, coef.df, vif.lm)
 ```
 
 
-### injecting perturbations in RV
+# injecting perturbations in RV
 
-#### random noise
-```{r}
-lmX = lm(rv ~ 0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data=scaled_final_fits)
-```
 
+### random noise
 
 ```{r}
-mean(scaled_final_fits$rv)
-sd(scaled_final_fits$rv)
-```
-
-for each day add random noise, look at lm of lambda and date fixed effects
-
-big perturbation: N(0, 148^2)
-small perturbation: N(0, 10^2)
-
-```{r}
-# create new dataframe with perturbed rv's for every date
-pert.df = scaled_final_fits %>%
+pert.df = scaled_model_df %>%
   group_by(obs_date) %>%
-  mutate(pert_small = rnorm(1, 0, sd = 10),
-         pert_big = rnorm(1, 0, sd = 148),
-         rv_pert_small = rv + pert_small,
-         rv_pert_big = rv + pert_big) %>%
-  ungroup()
-pert.df
-```
-
-
-```{r}
-# run our models on the perturbed rv's
-lm.pert.small = lm(rv_pert_small ~ 0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, pert.df)
-lm.pert.big = lm(rv_pert_big ~  0 + obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, pert.df)
-```
-
-
-```{r}
-# create a dataframe, each row is a date and contains the original coefficients, the new coefficients, and the size of the perturbations
-date.pert.coef.df = 
-  tibble( obs_date = names(lmX$coefficients[ startsWith( names(lmX$coefficients), "obs_date") ]),
-        coef_og = lmX$coefficients[ startsWith( names(lmX$coefficients), "obs_date") ] ) %>%
-  mutate(obs_date = factor(str_sub(obs_date,9))) %>%
-  cbind(tibble( coef_small = lm.pert.small$coefficients[ startsWith( names(lm.pert.small$coefficients), "obs_date") ] )) %>%
-  cbind(tibble( coef_big = lm.pert.big$coefficients[ startsWith( names(lm.pert.big$coefficients), "obs_date") ] )) %>%
-  full_join(pert.df %>% dplyr::select(obs_date, pert_small, pert_big) %>% unique(), by = "obs_date" )
-date.pert.coef.df
-```
-
-```{r}
-# plot 
-date.pert.coef.df %>%
-  ggplot() +
-  geom_point( mapping = aes(x = obs_date, y = coef_og) ) +
-  geom_point( mapping = aes(x = obs_date, y = coef_small), color = "blue" ) +
-  geom_linerange( mapping = aes(x = obs_date, ymin = coef_og, ymax = coef_og + pert_small) ) +
-  theme(axis.text.x = element_blank(),
-        axis.ticks = element_blank() )
-```
-
-```{r}
-date.pert.coef.df %>%
-  mutate(diff_small = abs( coef_og + pert_small - coef_small  ),
-         diff_big = abs( coef_og + pert_big - coef_big  ))
-```
-
-```{r}
-rm(date.pert.coef.df, lm.pert.small, lm.pert.big, pert.df, lmX)
-```
-
-
-#### random sinusodial noise
-
-```{r}
-# create perturbed df where each day is perturbed a little bit according to a sinusodial wave
-# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
-# sin_date is .1 times the sin of date_num, .1 chosen since 10cm/s rv are what we are looking for
-pert.df = scaled_final_fits %>%
-  group_by(obs_date) %>%
-  mutate(date_num = as.numeric(obs_date)/20,
-         sin_date = 1*sin(date_num)) %>%
+  mutate(pert_val = rnorm(1, sd = 2)) %>%
   ungroup() %>%
-  mutate(rv_pert = centered_rv + sin_date)
-pert.df
+  mutate(rv_pert = rv + pert_val,
+         centered_rv_pert = centered_rv + pert_val)
 ```
 
 ```{r}
 # graph of perturbation
 pert.df %>%
-  ggplot(mapping = aes(x = obs_date, y = sin_date)) +
-  geom_point() +
-  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) 
-```
-
-```{r}
-lm.pert = lm(rv_pert ~ obs_date + lambda*b1 + order_idx + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, pert.df)
+  dplyr::select(obs_date, pert_val) %>%
+  unique() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = as.Date(obs_date), y = pert_val))
 ```
 
 
 ```{r}
+lm.pert = lm(centered_rv_pert ~ lam_order + obs_date + b1, pert.df, weights = 1/snr^2 )
 # dataframe of coefficients
 coef.df = tibble( coef = rownames(summary(lm.pert)$coefficients),
                   estimate = summary(lm.pert)$coefficients[,1],
@@ -451,44 +902,231 @@ coef.df = tibble( coef = rownames(summary(lm.pert)$coefficients),
 ```
 
 ```{r}
-coef.df %>% 
-  filter( startsWith( coef, "obs_date") ) %>%
-  mutate(CI95 = se*1.96) %>%
-  summarise(mean_CI95 = mean(CI95),
-            mean_se = mean(se) )
+coef.df %>% filter( startsWith( coef, "(Intercept)") )
 ```
 
 ```{r}
-coef.df %>% filter( startsWith( coef, "obs_date") ) %>%
-  ggplot(mapping = aes(x = coef)) +
-  geom_point(aes(y = estimate)) +
-  theme(axis.text.x = element_blank(), axis.ticks = element_blank() ) +
-  geom_errorbar(aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+coef.df %>% filter( startsWith( coef, "obs_date") )
+```
+
+```{r}
+# get emmeans 
+emmean.summary = summary( emmeans(lm.pert, "obs_date", nuisance = "lam_order") )
+date.emmeans = emmean.summary$emmean
+date.se = emmean.summary$SE
+# get perturbed values by date
+date.perts = pert.df$pert_val %>% unique()
+```
+
+note that the standard errors of the model estimates and once we subtract out the first date
+
+```{r}
+sqrt( 2*date.se[1]^2 )
+```
+
+```{r}
+date.emmeans - date.emmeans[1]
+```
+
+```{r}
+# join the perturbed dataframe with the coefficients to compare our perturbed obsdate with 
+date.pert.table = full_join(
+  pert.df %>%
+    dplyr::select(obs_date, pert_val) %>%
+    unique() %>%
+    mutate(obs_date = as.Date(obs_date)),
+  coef.df %>%
+    filter( startsWith( coef, "obs_date") ) %>%
+    mutate(obs_date = as.Date(str_sub(coef, 9))),
+  by = "obs_date"
+  )
+date.pert.table$emmean = date.emmeans
+date.pert.table$emmeanSE = date.se
+```
+
+```{r}
+date.pert.table
+```
+
+
+```{r}
+date.pert.table %>%
+  ggplot() +
+  geom_point(aes(x = obs_date, y = emmean), color = "black") +
+  geom_errorbar(aes(x = obs_date, ymin = emmean - 1.96*emmeanSE, ymax = emmean + 1.96*emmeanSE), color = "black") +
+  geom_point(aes(x = obs_date, y = pert_val), color = "red") +
   xlab("obs date")
 ```
 
 ```{r}
-rm(lm.pert,pert.df,coef.df)
+date.pert.table %>%
+  mutate(diff = pert_val - emmean) %>%
+  ggplot() +
+  geom_point(aes(x = obs_date, y = diff), color = "black") +
+  xlab("obs date") +
+  ylab("difference between perturbed value and obs date estimate")
+```
+
+mean difference between perturbed value and obs date estimate
+```{r}
+date.pert.table %>%
+  mutate(diff = pert_val - emmean) %>%
+  summarize(mean_diff = mean(diff))
 ```
 
 
-## LASSO
+```{r}
+rm(lm.pert,pert.df,coef.df,date.emmeans,date.se,date.pert.table,emmean.summary, date.perts)
+```
+
+
+### random sinusodial noise
+
+
+```{r}
+# amplitude
+amp = 2
+# frequency
+freq = 1/30
+```
+
+
+```{r}
+# create perturbed df where each day is perturbed by a sinusodial wave
+# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
+# sin_date is 1 times the sin of date_num
+pert.df = scaled_model_df %>%
+  group_by(obs_date) %>%
+  mutate(date_num = as.numeric(as.Date(obs_date)),
+         pert_val = amp*sin(freq*date_num)) %>%
+  ungroup() %>%
+  mutate(rv_pert = rv + pert_val,
+         centered_rv_pert = centered_rv + pert_val)
+pert.df
+```
+
+```{r}
+# graph of perturbation
+pert.df %>%
+  dplyr::select(date_num, pert_val) %>%
+  unique() %>%
+  ggplot() +
+  geom_function(fun = function(x) amp*sin(freq*x), color = "red" ) +
+  geom_point(mapping = aes(x = date_num, y = pert_val))
+```
+
+```{r}
+lm.pert = lm(centered_rv_pert ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
+    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
+    gh_0 + gh_10, pert.df)
+# dataframe of coefficients
+coef.df = tibble( coef = rownames(summary(lm.pert)$coefficients),
+                  estimate = summary(lm.pert)$coefficients[,1],
+                  se = summary(lm.pert)$coefficients[,2],
+                  pval = summary(lm.pert)$coefficients[,4] )
+```
+
+```{r}
+lm.pert = lm(centered_rv_pert ~ lam_order + obs_date, pert.df)
+# dataframe of coefficients
+coef.df = tibble( coef = rownames(summary(lm.pert)$coefficients),
+                  estimate = summary(lm.pert)$coefficients[,1],
+                  se = summary(lm.pert)$coefficients[,2],
+                  pval = summary(lm.pert)$coefficients[,4] )
+```
+
+
+```{r}
+# get emmeans 
+emmean.summary = summary( emmeans(lm.pert, "obs_date", nuisance = "lam_order") )
+date.emmeans = emmean.summary$emmean
+date.se = emmean.summary$SE
+# get perturbed values by date
+date.perts = pert.df$pert_val %>% unique()
+```
+
+```{r}
+# join the perturbed dataframe with the coefficients to compare our perturbed obsdate with 
+date.pert.table = full_join(
+  pert.df %>%
+    dplyr::select(obs_date, pert_val) %>%
+    unique() %>%
+    mutate(obs_date = as.Date(obs_date)),
+  coef.df %>%
+    filter( startsWith( coef, "obs_date") ) %>%
+    mutate(obs_date = as.Date(str_sub(coef, 9))),
+  by = "obs_date"
+  )
+date.pert.table$emmean = date.emmeans
+date.pert.table$emmeanSE = date.se
+```
+
+
+
+```{r}
+date.pert.table %>%
+  ggplot() +
+  geom_point(aes(x = obs_date, y = emmean), color = "black") +
+  geom_errorbar(aes(x = obs_date, ymin = emmean - 1.96*emmeanSE, ymax = emmean + 1.96*emmeanSE), color = "black") +
+  geom_point(aes(x = obs_date, y = pert_val), color = "red") +
+  geom_function(fun = function(x) amp*sin(freq*as.numeric(x)), color = "red" ) +
+  xlab("obs date")
+```
+
+
+
+```{r}
+date.pert.table %>%
+  mutate(diff = pert_val - emmean) %>%
+  ggplot() +
+  geom_point(aes(x = obs_date, y = diff), color = "black") +
+  xlab("obs date") +
+  ylab("difference between perturbed value and obs date estimate")
+```
+
+
+
+mean difference between perturbed value and obs date estimate
+```{r}
+date.pert.table %>%
+  mutate(diff = pert_val - emmean) %>%
+  summarize(mean_diff = mean(diff),
+            sd_dff = sd(diff),
+            median_diff = median(diff))
+```
+
+mean_diff
+<dbl>
+sd_dff
+<dbl>
+median_diff
+<dbl>
+2.811175e-13	0.3053236	-0.003142147
+
+
+
+```{r}
+rm(lm.pert,pert.df,coef.df,date.emmeans,date.se,date.pert.table,emmean.summary, date.perts)
+```
+
+
+# LASSO
 
 ```{r}
 # create vector of response variable
-centered_rv = ( scaled_final_fits %>% drop_na() )$centered_rv
+centered_rv = ( scaled_model_df %>% drop_na() )$centered_rv
 ```
 
 *LASSO: no interaction terms*
 
 ```{r}
 # placeholder lm model to find out which categories are non-singular
-lm.test = lm(( scaled_final_fits %>% drop_na() )$rv ~ lambda + order_idx + obs_date, data = scaled_final_fits )
+lm.test = lm(( scaled_model_df %>% drop_na() )$rv ~ lambda + order_idx + obs_date, data = scaled_model_df )
 ```
 
 ```{r}
 # remove non-singular categories and create a dataframe out of them
-cat.df = as_tibble( model.matrix(~ lambda + order_idx + obs_date, data = scaled_final_fits %>% drop_na()) ) %>%
+cat.df = as_tibble( model.matrix(~ lambda + order_idx + obs_date, data = scaled_model_df %>% drop_na()) ) %>%
   dplyr::select(!attributes(alias(lm.test)$Complete)$dimnames[[1]]) %>%
   dplyr::select(!"(Intercept)")
 ```
@@ -499,7 +1137,7 @@ rm(lm.test)
 
 ```{r}
 # covariates not-including categorical variables
-covar.df = scaled_final_fits %>%
+covar.df = scaled_model_df %>%
   dplyr::select(gh_0, gh_2, gh_3, gh_4, gh_5 , gh_6 , gh_7 , gh_8 , gh_9 , gh_10 , gh_11 , gh_12,
                 snr, a1, depth1, width1, b1) %>%
   drop_na()
@@ -597,33 +1235,38 @@ best.model = glmnet(Xlasso,
 head( coef(best.model), n.covar + 1 )
 ```
 
+# stepwise model
 
-
-
-
-
-## stepwise model
 
 ```{r, eval = F}
-df.step = scaled_final_fits %>%
-  dplyr::select(rv, lambda, order_idx, obs_date, 
+# record the current time beforechunk
+now = Sys.time()
+
+# modify the og dataframe to keep only the necessary variables
+df.step = scaled_model_df %>%
+  dplyr::select(centered_rv, lam_order, obs_date, 
                 gh_0, gh_2, gh_3, gh_4, gh_5 , gh_6 , gh_7 , gh_8 , gh_9 , gh_10 , gh_11 , gh_12,
-                snr, a1, depth1, width1, b1) %>% 
+                snr, a1, depth1, width1, b1, colnames(scaled_model_df)[71:96]) %>% 
   drop_na()
 
-base.mdl = lm(rv ~ lambda + order_idx + obs_date, data=df.step)
-#start.mdl = lm(rv ~ lambda + order_idx + obs_date + gh_0 + lam_c1 + gh_9 + sigma_gh_1, data=df.step)
-full.mdl = lm(rv ~ lambda + order_idx + obs_date + ., data=df.step)
+# base or the starting modeling
+base.mdl = lm(centered_rv ~ lam_order + obs_date, data=df.step)
+# full model
+full.mdl = lm(centered_rv ~ lam_order + obs_date + ., data=df.step)
 
 # k=2 uses AIC, k=log(n) n = sample size uses BIC
 step.mdl = step(base.mdl, scope = list(lower = base.mdl, upper = full.mdl), direction = "both", k = 2)
 
-slope.model = lm(rv ~ lambda*b1 + obs_date, data = scaled_final_fits)
+# calculate the time difference after a chunk
+res = difftime(Sys.time(), now, units = "secs")
+# return a character string to show the time
+paste("Time for this code chunk to run:", res)
 ```
 
 
-
-
+```{r}
+rm(base.mdl, df.step, full.mdl, step.mdl, now, res)
+```
 
 
 # Cross-validation
@@ -634,7 +1277,7 @@ slope.model = lm(rv ~ lambda*b1 + obs_date, data = scaled_final_fits)
 set.seed(123)
 
 # sample size
-n = length(scaled_final_fits$rv)
+n = length(scaled_model_df$rv)
 
 # creating training data as 80% of the dataset
 random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
@@ -642,10 +1285,10 @@ random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
 
 ```{r}
 # generating training dataset
-train = scaled_final_fits[random_sample, ]
+train = scaled_model_df[random_sample, ]
 
 # generating testing dataset
-test = scaled_final_fits[!random_sample, ]
+test = scaled_model_df[!random_sample, ]
 ```
 
 
@@ -663,7 +1306,7 @@ test$pred_rv = predict(lm.train, newdata = test)
 test$predSE = (test$pred_rv-test$rv)^2
 test$predAE = abs(test$pred_rv-test$rv)
 # replace snr in test data with unscaled snr (for visuals below)
-test$snr = final_fits[!random_sample, ]$snr
+test$snr = model_df[!random_sample, ]$snr
 ```
 
 ```{r}
@@ -700,10 +1343,10 @@ rm(random_sample, train, test, lm.train)
 ### 80/20 split (centered rv model)
 
 ```{r}
-set.seed(123)
+set.seed(1234)
 
 # sample size
-n = length(scaled_final_fits$rv)
+n = length(scaled_model_df$rv)
 
 # creating training data as 80% of the dataset
 random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
@@ -711,10 +1354,10 @@ random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
 
 ```{r}
 # generating training dataset
-train = scaled_final_fits[random_sample, ]
+train = scaled_model_df[random_sample, ]
 
 # generating testing dataset
-test = scaled_final_fits[!random_sample, ]
+test = scaled_model_df[!random_sample, ]
 ```
 
 
@@ -732,7 +1375,7 @@ test$pred_rv = predict(lm.train, newdata = test)
 test$predSE = (test$pred_rv-test$centered_rv)^2
 test$predAE = abs(test$pred_rv-test$centered_rv)
 # replace snr in test data with unscaled snr (for visuals below)
-test$snr = final_fits[!random_sample, ]$snr
+test$snr = model_df[!random_sample, ]$snr
 ```
 
 ```{r}
@@ -783,8 +1426,12 @@ pred.df
 ```
 
 ```{r}
-# list of obs_date in scaled_final_fits
-final_days = ( scaled_final_fits %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
+# list of obs_date in scaled_model_df
+final_days = ( scaled_model_df %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
+```
+
+```{r}
+scaled_model_df = scaled_model_df %>% mutate(lambda = droplevels(lambda))
 ```
 
 BEGIN FOR LOOP
@@ -792,9 +1439,9 @@ BEGIN FOR LOOP
 ```{r}
 for (day in final_days) {
   # create training data without a specific date
-  train = scaled_final_fits %>% filter(obs_date != day) %>% drop_na()
+  train = scaled_model_df %>% filter(obs_date != day) %>% drop_na()
   # create testing data with the specific date
-  test = scaled_final_fits %>% filter(obs_date == day) %>% drop_na()
+  test = scaled_model_df %>% filter(obs_date == day) %>% drop_na()
   
   # linear model on training data
   lm.train = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
@@ -820,7 +1467,7 @@ for (day in final_days) {
                  lambda = test$lambda,
                  obs_date = test$obs_date,
                  order_idx = test$order_idx,
-                 snr = ( final_fits %>% filter(factor(obs_date) == day) %>% drop_na() )$snr )
+                 snr = ( model_df %>% filter(obs_date == day) %>% drop_na() )$snr )
   
   # combine temp dataframe and the full prediction dataframe
   pred.df = rbind(pred.df, temp )
@@ -830,7 +1477,6 @@ for (day in final_days) {
   
 }
 ```
-
 
 ```{r}
 # save pred.df
@@ -907,7 +1553,7 @@ length( unique(tail.df$order_idx) )
 length( unique(tail.df$obs_date) )
 ```
 
-134 (out of 247) lines appear in the tail of the distribution
+133 (out of 245) lines appear in the tail of the distribution
 63 (out of 70) orders appear in the tail of the distribution
 every date appears in the tail of the distribution
 
@@ -945,6 +1591,8 @@ pred.df %>%
   ggplot(mapping = aes(x = snr, color = isTail)) +
   geom_density()
 ```
+
+
 ```{r}
 print(bad_lams)
 ```
@@ -958,7 +1606,7 @@ Let's remove the 4 "bad" lambdas and see how much we improve our model:
 ```{r}
 lm.cv = lm(rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))
+    gh_0 + gh_10, scaled_model_df %>% filter( !(lambda %in% bad_lams) ))
 ```
 
 ```{r}
@@ -970,7 +1618,7 @@ summary(lm.cv)$sigma
 ```{r}
 lm.cv = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))
+    gh_0 + gh_10, scaled_model_df %>% filter( !(lambda %in% bad_lams) ))
 ```
 
 ```{r}
@@ -1017,15 +1665,15 @@ coef.df %>%
 set.seed(456)
 
 # sample size
-n = length( (scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))$rv)
+n = length( (scaled_model_df %>% filter( !(lambda %in% bad_lams) ))$rv)
 # creating training data as 80% of the dataset
 random_sample = sample( c( rep(T, round(.8*n) ), rep(F, round(.2*n) ) ) )
 
 # generating training dataset
-train = (scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))[random_sample, ]
+train = (scaled_model_df %>% filter( !(lambda %in% bad_lams) ))[random_sample, ]
 
 # generating testing dataset
-test = (scaled_final_fits %>% filter( !(lambda %in% bad_lams) ))[!random_sample, ]
+test = (scaled_model_df %>% filter( !(lambda %in% bad_lams) ))[!random_sample, ]
 
 # linear model on training data
 lm.train = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
@@ -1070,13 +1718,13 @@ row.num = 68
 
 lm0 = lm(rv ~ lambda + order_idx + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
     gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, scaled_final_fits %>% filter(row_number() != row.num) )
+    gh_0 + gh_10, scaled_model_df %>% filter(row_number() != row.num) )
 
 # prediction on left-out model
-pred.rv = predict(lm0, newdata = scaled_final_fits %>% filter(row_number() == row.num))
+pred.rv = predict(lm0, newdata = scaled_model_df %>% filter(row_number() == row.num))
 
 # ground truth rv
-actual.rv = scaled_final_fits %>% filter(row_number() == row.num) %>% dplyr::select(rv)
+actual.rv = scaled_model_df %>% filter(row_number() == row.num) %>% dplyr::select(rv)
 
 # prediction error
 absolute.error = abs(pred.rv - actual.rv)
@@ -1096,9 +1744,9 @@ final_lams[line.num]
 
 ```{r}
 # create training data without a specific lambda
-train = scaled_final_fits %>% filter(lambda != final_lams[line.num])
+train = scaled_model_df %>% filter(lambda != final_lams[line.num])
 # create testing data with the specific lambda
-test = scaled_final_fits %>% filter(lambda == final_lams[line.num])
+test = scaled_model_df %>% filter(lambda == final_lams[line.num])
 ```
 
 ```{r}
@@ -1166,16 +1814,16 @@ rm(lm.train, pred.df, test, train, Xtest, line.num, model_coefs)
 ### leave-one-day out (single day)
 
 ```{r}
-# list of obs_date in scaled_final_fits
-final_days = ( scaled_final_fits %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
+# list of obs_date in scaled_model_df
+final_days = ( scaled_model_df %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
 day.num = 100
 ```
 
 ```{r}
 # create training data without a specific date
-train = scaled_final_fits %>% filter(obs_date != final_days[day.num])
+train = scaled_model_df %>% filter(obs_date != final_days[day.num])
 # create testing data with the specific date
-test = scaled_final_fits %>% filter(obs_date == final_days[day.num])
+test = scaled_model_df %>% filter(obs_date == final_days[day.num])
 ```
 
 
@@ -1242,9 +1890,9 @@ rm(lm.train, pred.df, test, train, Xtest)
 
 ```{r}
 # create training data without a specific date
-train = scaled_final_fits %>% filter(obs_date != final_days[day.num])
+train = scaled_model_df %>% filter(obs_date != final_days[day.num])
 # create testing data with the specific date
-test = scaled_final_fits %>% filter(obs_date == final_days[day.num])
+test = scaled_model_df %>% filter(obs_date == final_days[day.num])
 ```
 
 
@@ -1284,6 +1932,92 @@ pred.df %>%
 sqrt( mean( (pred.df$true_rv - pred.df$pred_rv)^2 ) )
 mean( abs(pred.df$true_rv - pred.df$pred_rv) )
 ```
+
+
+
+
+# TEST
+
+```{r}
+library(emmeans)
+```
+
+```{r}
+#set.seed(123)
+
+n = 10
+
+df = data.frame(
+  x = factor( rep(seq(1,3), each = 2*n) ),
+  y = factor( rep(c("A","B"), 3*n) ),
+  #eps = rnorm(6*n, sd = .75)
+  eps = 0
+)
+
+df = df %>%
+  mutate( x_effect = ifelse(x == 1, 2, ifelse(x == 2, 5, -3))) %>%
+  mutate( y_effect = ifelse(y == "A", -1, 7)) %>%
+  mutate(z = x_effect + y_effect + eps)
+```
+
+```{r}
+# set contrasts
+#contrasts(df$x) = contr.sum(3)
+#contrasts(df$y) = contr.sum(2)
+```
+
+```{r}
+model = lm(z ~ x + y, df)
+summary( model )
+```
+
+mu_x = 2, 5, -3
+mu_y = -1, 7
+
+
+```{r}
+X = matrix( c(
+  1,0,0,1,0,
+  0,1,0,1,0,
+  0,0,1,1,0,
+  1,0,0,0,1,
+  0,1,0,0,1,
+  0,0,1,0,1
+  ), nrow = 6, byrow = T
+)
+X
+```
+
+```{r}
+y = 1 + c(0,3,-5,8,3+8,-5+8)
+y
+```
+
+```{r}
+
+```
+
+
+z = mu_x + mu_y = intercept + xi + yi
+
+```{r}
+df %>%
+  mutate(mod_z = z - 1)
+```
+
+
+
+
+
+```{r}
+emmeans(model, "x")
+```
+
+```{r}
+emmeans(model, "y")
+```
+
+
 
 
 

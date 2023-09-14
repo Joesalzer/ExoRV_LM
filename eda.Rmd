@@ -45,10 +45,52 @@ final_lams_orders = ( final_fits %>% group_by(lambda_order) %>% summarize(n. = n
 ```
 
 
+
+
 # visuals
 
-## pairs plots
+## hg1 and rv plots
 
+```{r}
+# add centered rv and scaled rv
+final_fits = final_fits %>%
+  group_by(lambda_order) %>%
+  mutate(centered_rv = rv - mean(rv),
+         scale_rv = centered_rv/sd(rv)) %>%
+  ungroup()
+```
+
+```{r}
+i = 301
+
+hg1.lm = lm(centered_rv ~ gh_1, final_fits %>% filter(lambda_order == final_lams_orders[i] ) )
+final_fits %>%
+  filter(lambda_order == final_lams_orders[i] ) %>%
+  ggplot(mapping = aes(x=gh_1, y=centered_rv)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+
+
+```{r}
+i = 150
+
+hg2.lm = lm(scale_rv ~ gh_1, final_fits %>% filter(lambda_order == final_lams_orders[i] ) )
+final_fits %>%
+  filter(lambda_order == final_lams_orders[i] ) %>%
+  ggplot(mapping = aes(x=gh_1, y=scale_rv)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg2.lm$coefficients[2], ", adj.r.squared == ", summary(hg2.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+```{r}
+rm(hg1.lm, hg2.lm, i)
+```
+
+## pairs plots
 
 ```{r}
 covar.list = c("gh_0", "gh_2", "gh_3", "gh_4", "gh_5", "gh_6", "gh_7", "gh_8", "gh_9", "gh_10", "gh_11", "gh_12", "snr", "a1", "depth1", "width1", "b1")

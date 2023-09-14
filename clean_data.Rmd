@@ -114,7 +114,7 @@ solar_line_fits
 ```{r}
 # look at various lambdas
 solar_line_fits %>%
-  filter(lambda == solar_line_fits$lambda[3])
+  filter(lambda == 5286.06)
 ```
 
 ```{r}
