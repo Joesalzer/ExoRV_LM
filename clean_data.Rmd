@@ -23,8 +23,9 @@ wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
 
 # Loading data
 
-## pixels
+## extra
 
+### pixels
 
 *REMINDER: look at lambda-order pairs for finding middle pixel*
 
@@ -33,31 +34,25 @@ wd_data = "/Users/josephsalzer/research/exostat/neid_solar/"
 line_fits = read_csv(str_c(wd_data, "neid_linefinder_line_fits.csv")) %>%
   rename(fit_lam_c = "fit_λc",
          fit_sig2 = "fit_σ²",
-         chi2_per_dof = "χ²_per_dof") %>%
-  dplyr::select(line_id, pixels)
+         chi2_per_dof = "χ²_per_dof")
 
 line_fits
 
 # create matrix of starting pixel (1st col) and ending pixel (2nd col)
-pixel_mat = matrix( as.numeric( str_split(line_fits$pixels, regex(":"), simplify = T) ), ncol = 2, byrow = F )
-
-# create col of middle pixel
-line_fits$mid_pixel = ( pixel_mat[,2] + pixel_mat[,1] )/2
-
-# remove pixel_mat
-rm(pixel_mat)
-
-# denote m_pixel as the first row's middle pixel
-line_fits = line_fits %>%
-  group_by(line_id) %>%
-  summarize(m_pixel = mid_pixel[1]) %>%
-  ungroup()
+# pixel_mat = matrix( as.numeric( str_split(line_fits$pixels, regex(":"), simplify = T) ), ncol = 2, byrow = F )
+# 
+# # create col of middle pixel
+# line_fits$mid_pixel = ( pixel_mat[,2] + pixel_mat[,1] )/2
+# 
+# # remove pixel_mat
+# rm(pixel_mat)
+# 
+# # denote m_pixel as the first row's middle pixel
+# line_fits = line_fits %>%
+#   group_by(line_id) %>%
+#   summarize(m_pixel = mid_pixel[1]) %>%
+#   ungroup()
 ```
-
-```{r}
-line_fits
-```
-
 
 ```{r}
 pixel.df = line_fits %>%
@@ -80,7 +75,7 @@ pixel.df %>%
 rm(line_fits, pixel.df)
 ```
 
-## load bisectors_test.csv
+### load bisectors_test.csv
 
 ```{r}
 #bisectors_test = read.csv("bisectors_test.csv")
@@ -88,7 +83,7 @@ rm(line_fits, pixel.df)
 ```
 
 
-## join final_fits and pixel.df
+### join final_fits and pixel.df
 
 ```{r}
 #final_fits %>%
@@ -102,26 +97,13 @@ rm(line_fits, pixel.df)
 ## loading solar_line_fits_20230215.csv
 
 ```{r}
-# solar line fits has lambda, depth and width measurements
+# solar line fits has lambda, depth and width measurements (and hg coefficients but they arent good)
 solar_line_fits = read_csv(str_c(wd_data, "solar_line_fits_20230215.csv")) %>%
   rename(lam_c1 = "λc1") %>%
   mutate(lambda = round(lambda,3)) %>%
-  #mutate(lambda = factor(lambda)) %>%
-  mutate(obs_date = as.Date(obs_date)) 
-solar_line_fits
-```
-
-```{r}
-# look at various lambdas
-solar_line_fits %>%
-  filter(lambda == 5286.06)
-```
-
-```{r}
-# dplyr::select only necessary columns
-solar_line_fits = solar_line_fits %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
   dplyr::select(lambda,order_idx,obs_date,snr,a1,lam_c1,depth1,width1,b1)
-solar_line_fits 
+solar_line_fits
 ```
 
 ## load gh_fits_Vald=0.01_overlapcutoff=3.0e-5_rejectTelluricSlope=10000.csv
@@ -146,7 +128,7 @@ gh_fits2
 
 ## summaries before joining data
 
-For solar_line_fits: there are 765 total lines (lambdas), with 223 observations per line for lines on a single order and 446 for lines on two order. 436 of the lines appear on a single order and 329 of the lines appear on multiple orders.
+For solar_line_fits: there are 765 total lines (lambdas), with 223 observations (obs date) per line for lines on a single order and 446 for lines on two order. 436 of the lines appear on a single order and 329 of the lines appear on multiple orders.
 
 ```{r}
 solar_line_fits %>%
@@ -191,6 +173,7 @@ Look at set operations on the lambdas in gh_fits and lambdas in solar_line_fits
 # get all unique lines in gh_fits1 and solar_line_fits
 gh_lambdas = ( gh_fits1 %>% group_by(lambda) %>% summarize(num = n()) )$lambda
 solar_lambdas = ( solar_line_fits %>% group_by(lambda) %>% summarize(num = n()) )$lambda
+
 # 0 lines appear in gh_fits1 but not solar_line_fits
 length( setdiff(gh_lambdas,solar_lambdas) )
 # 517 lines appear in solar_line_fits but not gh_fits
@@ -200,15 +183,47 @@ length( intersect(solar_lambdas,gh_lambdas) )
 ```
 
 ```{r}
+# get all unique obs dates in gh_fits1 and solar_line_fits
+gh_obsdate = ( gh_fits1 %>% group_by(obs_date) %>% summarize(num = n()) )$obs_date
+solar_obsdate = ( solar_line_fits %>% group_by(obs_date) %>% summarize(num = n()) )$obs_date
+
+# 0 days appear in gh_fits1 but not solar_line_fits
+length( setdiff(gh_obsdate,solar_obsdate) )
+# 85 days appear in solar_line_fits but not gh_fits
+length( setdiff(solar_obsdate,gh_obsdate) )
+# 138 days appear in both solar_line_fits and gh_fits
+length( intersect(solar_obsdate,gh_obsdate) )
+```
+
+
+```{r}
 # get all unique lines in gh_fits2 and solar_line_fits
 gh_lambdas = ( gh_fits2 %>% group_by(lambda) %>% summarize(num = n()) )$lambda
 solar_lambdas = ( solar_line_fits %>% group_by(lambda) %>% summarize(num = n()) )$lambda
+
 # 0 lines appear in gh_fits2 but not solar_line_fits
 length( setdiff(gh_lambdas,solar_lambdas) )
 # 517 lines appear in solar_line_fits but not gh_fits2
 length( setdiff(solar_lambdas,gh_lambdas) )
 # 248 lines sappear in both solar_line_fits and gh_fits2
 length( intersect(solar_lambdas,gh_lambdas) )
+```
+
+```{r}
+# get all unique obs dates in gh_fits2 and solar_line_fits
+gh_obsdate = ( gh_fits2 %>% group_by(obs_date) %>% summarize(num = n()) )$obs_date
+solar_obsdate = ( solar_line_fits %>% group_by(obs_date) %>% summarize(num = n()) )$obs_date
+
+# 0 days appear in gh_fits1 but not solar_line_fits
+length( setdiff(gh_obsdate,solar_obsdate) )
+# 76 days appear in solar_line_fits but not gh_fits2
+length( setdiff(solar_obsdate,gh_obsdate) )
+# 147 days appear in both solar_line_fits and gh_fits2
+length( intersect(solar_obsdate,gh_obsdate) )
+```
+
+```{r}
+rm(gh_obsdate,solar_obsdate,gh_lambdas,solar_lambdas)
 ```
 
 ## join solar_line_fits and gh_fits
@@ -244,7 +259,7 @@ final_fits_10kmps %>%
   count(n.)
 ```
 
-320 lambda-order pairs exist
+320 lambda-order pairs exist:
 
 ```{r}
 final_fits_10kmps %>%
@@ -272,6 +287,7 @@ final_fits_6kmps %>%
   count()
 ```
 
+# Modify and write Data
 
 ## add columns to final_fits (RV and repeat_orders)
 
@@ -294,7 +310,7 @@ final_fits_10kmps = final_fits_10kmps %>%
 final_fits_10kmps
 ```
 
-add RV calculations
+add RV calculations:
 
 ```{r}
 # speed of light
@@ -304,8 +320,34 @@ final_fits_10kmps = final_fits_10kmps %>%
   mutate(rv = c_light*(lam_c1-lambda)/lambda)
 ```
 
+add lam_order
+
 ```{r}
-write.csv(final_fits_10kmps, str_c(wd_data, "final_fits_10kmps.csv"), row.names=FALSE)
+final_fits_10kmps = final_fits_10kmps %>%
+  mutate(lam_order = factor( str_c(lambda,"_",order_idx) )  )
+```
+
+rename gh to hg
+
+```{r}
+colnames(final_fits_10kmps) = str_replace_all(colnames(final_fits_10kmps), "gh_", "hg_")
+```
+
+column for which order has higher snr for repeated lines
+
+```{r}
+final_fits_10kmps = final_fits_10kmps %>%
+  group_by(lam_order) %>%
+  # mean snr/depth for a given lambda-order
+  mutate(mean_snr = mean(snr),
+         med_snr = median(snr)) %>%
+  ungroup() %>%
+  group_by(lambda) %>%
+  # create max snr for each lambda and is_max_snr for order that is max
+  mutate(max_snr = max(mean_snr),
+         is_max_snr = ifelse(mean_snr == max_snr, T, F)) %>%
+  ungroup() %>%
+  mutate(max_snr=NULL)
 ```
 
 ### 6kmps
@@ -337,14 +379,315 @@ final_fits_6kmps = final_fits_6kmps %>%
   mutate(rv = c_light*(lam_c1-lambda)/lambda)
 ```
 
+add lam_order
+
+```{r}
+final_fits_6kmps = final_fits_6kmps %>%
+  mutate(lam_order = factor( str_c(lambda,"_",order_idx) )  )
+```
+
+rename gh to hg
+
+```{r}
+colnames(final_fits_6kmps) = str_replace_all(colnames(final_fits_6kmps), "gh_", "hg_")
+```
+
+column for which order has higher snr for repeated lines
+
+```{r}
+final_fits_6kmps = final_fits_6kmps %>%
+  group_by(lam_order) %>%
+  # mean snr/depth for a given lambda-order
+  mutate(mean_snr = mean(snr),
+         med_snr = median(snr)) %>%
+  ungroup() %>%
+  group_by(lambda) %>%
+  # create max snr for each lambda and is_max_snr for order that is max
+  mutate(is_max_snr = ifelse(mean_snr == max(mean_snr), T, F)) %>%
+  ungroup() 
+```
+
+```{r}
+final_fits_6kmps
+```
+
+```{r}
+# remove unnecessary dataframes
+rm(gh_fits1,gh_fits2,repeat_lambdas6kmps,repeat_lambdas10kmps,solar_line_fits,c_light)
+```
+
+## outlier lines
+
+### constant b1s
+
+*b1s are resticted from -.7 and .7, some lines achieve these bounds*
+
+```{r}
+# final_fits_10kmps %>%
+#   ggplot() +
+#   geom_point(mapping = aes(y = b1, x=snr))
+```
+
+10kmps
+
+```{r}
+# lambda-orders that have constant b1s
+constant_lamorders = ( final_fits_10kmps %>%
+  group_by(lam_order) %>%
+  summarize(sd_b1 = sd(b1)) %>%
+  filter(sd_b1 == 0) )$lam_order
+constant_lamorders
+```
+
+*has at least one threshold b1*
+```{r}
+threshb1_lamorders = unique( ( final_fits_10kmps %>% filter(b1 == .7 | b1 == -.7) )$lam_order )
+threshb1_lamorders
+# remove these for now, dont look like theyre much of outliers tbh
+rm(threshb1_lamorders)
+```
+
+```{r}
+final_fits_10kmps %>%
+  filter(lam_order %in% constant_lamorders) %>%
+  dplyr::select(lam_order, b1) %>%
+  unique()
+```
+
+```{r}
+# filter out constant b1's
+final_fits_10kmps = final_fits_10kmps %>%
+  filter(! lam_order %in% constant_lamorders)
+```
+
+6kmps
+
+```{r}
+# lambda-orders that have constant b1s
+constant_lamorders = ( final_fits_6kmps %>%
+  group_by(lam_order) %>%
+  summarize(sd_b1 = sd(b1)) %>%
+  filter(sd_b1 == 0) )$lam_order
+constant_lamorders
+```
+
+```{r}
+final_fits_6kmps %>%
+  filter(lam_order %in% constant_lamorders) %>%
+  dplyr::select(lam_order, b1) %>%
+  unique()
+```
+
+```{r}
+# filter out constant b1's
+final_fits_6kmps = final_fits_6kmps %>%
+  filter(! lam_order %in% constant_lamorders)
+```
+
+```{r}
+rm(constant_lamorders)
+```
+
+### constant rv
+
+*5286.06 has constant rv*
+10kmps
+
+```{r}
+constant_lamorders = ( final_fits_10kmps %>%
+  group_by(lam_order) %>%
+  summarize(sd_rv = sd(rv)) %>%
+  filter(sd_rv == 0) )$lam_order
+constant_lamorders
+```
+
+```{r}
+# filter out constant b1's
+final_fits_10kmps = final_fits_10kmps %>%
+  filter(! lam_order %in% constant_lamorders)
+```
+
+
+6kmps
+
+```{r}
+constant_lamorders = ( final_fits_6kmps %>%
+  group_by(lam_order) %>%
+  summarize(sd_rv = sd(rv)) %>%
+  filter(sd_rv == 0) )$lam_order
+constant_lamorders
+```
+
+```{r}
+# filter out constant b1's
+final_fits_6kmps = final_fits_6kmps %>%
+  filter(! lam_order %in% constant_lamorders)
+```
+
+```{r}
+rm(constant_lamorders)
+```
+
+
+### hg NA's
+
+10kmps
+
+```{r}
+final_fits_10kmps %>% filter(if_any(everything(), is.na))
+```
+
+*check if above is equal to 276, otherwise we have more than one NA!*
+Line 4662.822 on order 43 has a NAN on 2021-04-17, and outlier measurements for hgs on other days, so lets remove it
+
+```{r}
+final_fits_10kmps = final_fits_10kmps %>%
+  filter(! ( lambda == 4662.822  & order_idx == 43) )
+final_fits_10kmps[is.na(final_fits_10kmps$is_max_snr),"is_max_snr"] = T
+```
+
+6kmps
+
+```{r}
+final_fits_6kmps %>% filter(if_any(everything(), is.na))
+```
+*check if above is equal to 294, otherwise we have more than one NA!*
+Line 4662.822 on order 43 has a NAN on 2021-04-17, and outlier measurements for hgs on other days, so lets remove it
+
+```{r}
+final_fits_6kmps = final_fits_6kmps %>%
+  filter(! ( lambda == 4662.822  & order_idx == 43) )
+final_fits_6kmps[is.na(final_fits_6kmps$is_max_snr),"is_max_snr"] = T
+```
+
+
+### outlier day
+
+```{r}
+(final_fits_6kmps %>%
+  group_by(lam_order) %>%
+  mutate(rv_center = rv - mean(rv),
+         rv_scale = rv_center/sd(rv) ) %>%
+  ungroup() )$rv_scale %>% quantile(c(0.0005,.025,.05,.95,.975,0.9995))
+```
+
+```{r}
+final_fits_6kmps %>%
+  group_by(lam_order) %>%
+  mutate(rv_center = rv - mean(rv),
+         rv_scale = rv_center/sd(rv) ) %>%
+  ungroup() %>%
+  filter(rv_scale < -3.939154| rv_scale > 3.373689 ) %>%
+  count(obs_date)
+```
+
+2021-07-10 shows up many times in our tail of scale_rv
+
+```{r}
+final_fits_6kmps = final_fits_6kmps %>% filter(obs_date != "2021-07-10")
+final_fits_10kmps = final_fits_6kmps %>% filter(obs_date != "2021-07-10")
+```
+
+# Standardize by line
+
+Now we will "standardize" our continuous variables, so they can be interpreted as a "change" in shape measurements. I.e, we group by lam_order and subtract out the mean shape measurement
+
+```{r}
+# columns that we do not want to apply standardization to
+col.notstandard = 
+  c("lambda","order_idx","repeat_order","lam_order","obs_date",
+  "snr","mean_snr","med_snr","is_max_snr")
+col.notstandard
+```
+
+```{r}
+# columns that we do want to apply standardization to
+col.standard = colnames(final_fits_6kmps)[ !(colnames(final_fits_6kmps) %in% col.notstandard) ]
+col.standard
+```
+
+```{r}
+# center function
+centerFun = function(x, na.rm = FALSE) (x - mean(x, na.rm = na.rm))
+```
+
+## 6kmps
+
+```{r}
+# not standardized df
+notstandard.df = final_fits_6kmps %>% dplyr::select( all_of(col.notstandard) )
+# to be standardized df
+standard.df = final_fits_6kmps %>% dplyr::select( lam_order, obs_date, all_of(col.standard) )
+```
+
+```{r}
+# take standard.df, and standardize after grouping by lam_order
+centered.df = standard.df %>%
+  group_by(lam_order) %>%
+  mutate_at(col.standard,centerFun) %>%
+  ungroup() %>%
+  rename_at(col.standard, ~ paste0(., '_center'))
+```
+
+```{r}
+final_fits_6kmps = notstandard.df %>%
+  inner_join(standard.df, by = c("lam_order","obs_date")) %>%
+  inner_join(centered.df, by = c("lam_order","obs_date"))
+```
+
+```{r}
+rm(notstandard.df,standard.df,centered.df)
+```
+
+## 10kmps
+
+```{r}
+# not standardized df
+notstandard.df = final_fits_10kmps %>% dplyr::select( all_of(col.notstandard) )
+# to be standardized df
+standard.df = final_fits_10kmps %>% dplyr::select( lam_order, obs_date, all_of(col.standard) )
+```
+
+```{r}
+# take standard.df, and standardize after grouping by lam_order
+centered.df = standard.df %>%
+  group_by(lam_order) %>%
+  mutate_at(col.standard,centerFun) %>%
+  ungroup() %>%
+  rename_at(col.standard, ~ paste0(., '_center'))
+```
+
+```{r}
+final_fits_10kmps = notstandard.df %>%
+  inner_join(standard.df, by = c("lam_order","obs_date")) %>%
+  inner_join(centered.df, by = c("lam_order","obs_date"))
+```
+
+```{r}
+rm(notstandard.df,standard.df,centered.df,centerFun,col.standard,col.notstandard)
+```
+
+```{r}
+final_fits_6kmps %>%
+  dplyr::select(rv, rv_center) %>%
+  summary()
+final_fits_10kmps %>%
+  dplyr::select(rv, rv_center) %>%
+  summary()
+```
+
+# write csv
+
 ```{r}
 write.csv(final_fits_6kmps, str_c(wd_data, "final_fits_6kmps.csv"), row.names=FALSE)
 ```
 
 ```{r}
-# remove unnecessary dataframes
-rm(gh_fits1,gh_fits2,repeat_lambdas6kmps,repeat_lambdas10kmps,repeat_lambdas,solar_line_fits,gh_lambdas,solar_lambdas,c_light, line_fits, pixel.df)
+write.csv(final_fits_10kmps, str_c(wd_data, "final_fits_10kmps.csv"), row.names=FALSE)
 ```
 
+```{r}
+
+```
 
 

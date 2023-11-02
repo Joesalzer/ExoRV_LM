@@ -7,15 +7,22 @@ output: html_document
 
 EDA for final fits dataframe, various visuals and summaries
 
+<!-- # ```{r setup, include=FALSE} -->
+<!-- # knitr::opts_chunk$set(echo = TRUE) -->
+<!-- # library(tidyverse) -->
+<!-- # library(stringr) -->
+<!-- # library(readxl) -->
+<!-- # library(lme4) -->
+<!-- # library(MASS) -->
+<!-- # library(gridExtra) -->
+<!-- # library(gtools) -->
+<!-- # ``` -->
+
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(stringr)
-library(readxl)
-library(lme4)
-library(MASS)
-library(gridExtra)
-library(gtools)
 ```
 
 ```{r}
@@ -23,74 +30,74 @@ library(gtools)
 wd_data = "/Users/josephsalzer/research/exostat/"
 ```
 
-
 # Loading data
 
 ```{r}
-final_fits = tibble( read.csv(str_c(wd_data, "final_fits_6kmps.csv") ) ) %>%
+# get species info for each line
+species.df = read_csv(str_c(wd_data,"neid_solar/","clean_line_info.csv")) %>%
+  dplyr::select(lambda, species, excitation_energy) %>%
+  mutate(lambda = factor( round(lambda,3) ),
+         species = factor(species)) %>%
+  unique()
+```
+
+
+```{r}
+# convert categorical vars to factors
+model.df = tibble( read.csv(str_c(wd_data,"neid_solar/", "final_fits_6kmps.csv") ) ) %>%
   rename( wavelength = lambda ) %>%
-  mutate( obs_date = factor(obs_date),
-          wavelength = round(wavelength,3),
+  mutate( obs_date = as.Date(obs_date),
           lambda = factor(wavelength),
           order_idx = factor(order_idx),
-          lambda_order = factor( str_c(wavelength,"_",order_idx) ) )
-final_fits
+          lam_order = factor( lam_order )
+        )
 ```
 
 ```{r}
-# list of lambdas in final_fits
-final_lams = ( final_fits %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
-# list of lambdas in final_fits
-final_lams_orders = ( final_fits %>% group_by(lambda_order) %>% summarize(n. = n()) )$lambda_order
-```
-
-
-
-
-# visuals
-
-## hg1 and rv plots
-
-```{r}
-# add centered rv and scaled rv
-final_fits = final_fits %>%
-  group_by(lambda_order) %>%
-  mutate(centered_rv = rv - mean(rv),
-         scale_rv = centered_rv/sd(rv)) %>%
-  ungroup()
+# join final fits and species
+model.df = model.df %>%
+  left_join(species.df, by = "lambda")
 ```
 
 ```{r}
-i = 301
-
-hg1.lm = lm(centered_rv ~ gh_1, final_fits %>% filter(lambda_order == final_lams_orders[i] ) )
-final_fits %>%
-  filter(lambda_order == final_lams_orders[i] ) %>%
-  ggplot(mapping = aes(x=gh_1, y=centered_rv)) +
-  geom_point() +
-  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
-  geom_smooth(method = "lm", se=F)
-```
-
-
-
-```{r}
-i = 150
-
-hg2.lm = lm(scale_rv ~ gh_1, final_fits %>% filter(lambda_order == final_lams_orders[i] ) )
-final_fits %>%
-  filter(lambda_order == final_lams_orders[i] ) %>%
-  ggplot(mapping = aes(x=gh_1, y=scale_rv)) +
-  geom_point() +
-  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg2.lm$coefficients[2], ", adj.r.squared == ", summary(hg2.lm)$adj.r.squared) ) +
-  geom_smooth(method = "lm", se=F)
+rm(species.df)
 ```
 
 ```{r}
-rm(hg1.lm, hg2.lm, i)
+head(model.df)
 ```
 
-## pairs plots
+```{r}
+# list of lambdas in model.df
+final_lams = ( model.df %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
+length(final_lams)
+```
+```{r}
+# list of lambda-orders in model.df
+final_lams_orders = ( model.df %>% group_by(lam_order) %>% summarize(n. = n()) )$lam_order
+length(final_lams_orders)
+```
+
+```{r}
+# list of lambda-orders in model.df
+final_days = ( model.df %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
+length(final_days)
+```
+# Data summaries
+
+```{r}
+# check how many line-order pairs there are
+model.df %>%
+  group_by(lambda, order_idx) %>%
+  count()
+```
+there are 310 line-order pairs, 147 observations per line-order pair
+
+```{r}
+summary(model.df)
+```
+
+# pairs plots
 
 ```{r}
 covar.list = c("gh_0", "gh_2", "gh_3", "gh_4", "gh_5", "gh_6", "gh_7", "gh_8", "gh_9", "gh_10", "gh_11", "gh_12", "snr", "a1", "depth1", "width1", "b1")
@@ -98,24 +105,8 @@ covar.list = c("gh_0", "gh_2", "gh_3", "gh_4", "gh_5", "gh_6", "gh_7", "gh_8", "
 covar.combinations = combinations(length(covar.list),2)
 ```
 
-
 ```{r}
 dim(covar.combinations)
-```
-
-```{r}
-final_fits %>%
-  filter(round(lambda,3) == 4662.822) %>%
-  dplyr::select(lambda,order_idx,obs_date,gh_0, lam_c1, depth1, rv)
-```
-
-```{r}
-summary(final_fits$snr)
-```
-
-```{r}
-final_fits %>%
-  filter(gh_0 < -.1)
 ```
 
 ```{r}
@@ -125,10 +116,10 @@ for (i in c(1:30)) {
   covar2 = row.vec[2]
   
   print(
-    final_fits %>%
+    model.df %>%
       drop_na() %>%
       ggplot() +
-      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = lambda))
+      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = wavelength))
   )
   
 }
@@ -142,10 +133,10 @@ for (i in c(31:60)) {
   covar2 = row.vec[2]
   
   print(
-    final_fits %>%
+    model.df %>%
       drop_na() %>%
       ggplot() +
-      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = lambda))
+      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = wavelength))
   )
   
 }
@@ -158,10 +149,10 @@ for (i in c(61:90)) {
   covar2 = row.vec[2]
   
   print(
-    final_fits %>%
+    model.df %>%
       drop_na() %>%
       ggplot() +
-      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = lambda))
+      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = wavelength))
   )
 }
 ```
@@ -174,10 +165,10 @@ for (i in c(91:120)) {
   covar2 = row.vec[2]
   
   print(
-    final_fits %>%
+    model.df %>%
       drop_na() %>%
       ggplot() +
-      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = lambda))
+      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = wavelength))
   )
 }
 ```
@@ -190,37 +181,218 @@ for (i in c(121:136)) {
   covar2 = row.vec[2]
   
   print(
-    final_fits %>%
+    model.df %>%
       drop_na() %>%
       ggplot() +
-      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = lambda))
+      geom_point(mapping = aes(x = !!sym(covar.list[covar1]), y = !!sym(covar.list[covar2]), color = wavelength))
   )
 }
 ```
 
 
-Single comparison:
+## Single pairs plot
+
+depth + width
 
 ```{r}
-final_fits %>%
+model.df %>%
+  filter(wavelength<8600) %>%
   ggplot() +
-  geom_point(mapping = aes(x = depth1, y = width1, color = lambda))
+  geom_point(mapping = aes(x = depth1_center, y = width1_center, color = wavelength),alpha = .2)
+```
+```{r}
+model.df %>%
+  filter(wavelength > 8600) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = depth1_center, y = width1_center, color = wavelength), alpha = .2)
 ```
 
 
-## scatter plots depth for two lines correlation
+```{r}
+model.df %>%
+  filter(wavelength<8600) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = depth1, y = width1, color = wavelength))
+```
 
-#"5248.496_57"
-#final_lams_orders[2]
-#final_lams_orders[120]
+
+```{r}
+model.df %>%
+  #filter(wavelength < 7000) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = depth1, y = width1, color = lambda)) +
+  theme(legend.position = "none")
+```
+
+```{r}
+rm(covar.combinations, covar.list, covar1, covar2, i, row.vec)
+```
+
+# rv over time
+
+
+mean change in rv over time:
+```{r}
+model.df %>%
+  group_by(obs_date) %>%
+  summarize( mean_rv_center = mean(rv_center), sd_rv_center = sd(rv_center) ) %>%
+  ungroup() %>%
+  mutate(date = as.Date(obs_date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_rv_center))
+```
+mean change in rv over time 95% confidence bars:
+```{r}
+model.df %>%
+  group_by(obs_date) %>%
+  summarize( mean_rv_center = mean(rv_center), sd_rv_center = sd(rv_center)/sqrt(309) ) %>%
+  ungroup() %>%
+  mutate(date = as.Date(obs_date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_rv_center)) +
+  geom_errorbar(aes(x = date, ymin = mean_rv_center - 1.96*sd_rv_center, ymax = mean_rv_center + 1.96*sd_rv_center), color = "black")
+```
+
+mean change in rv over time, with perturbation:
+```{r}
+# amplitude
+amp = 2
+# frequency
+freq = 1/30
+```
+
+```{r}
+# create perturbed df where each day is perturbed by a sinusodial wave
+# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
+# sin_date is 1 times the sin of date_num
+model.df %>%
+  group_by(obs_date) %>%
+  mutate(date_num = as.numeric(as.Date(obs_date)),
+         pert_val = amp*sin(freq*date_num)) %>%
+  ungroup() %>%
+  mutate(rv_pert_center = rv_center + pert_val) %>%
+  group_by(obs_date) %>%
+  summarize( mean_rv_center = mean(rv_pert_center), sd_rv_center = sd(rv_pert_center) ) %>%
+  ungroup() %>%
+  mutate(date = as.Date(obs_date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_rv_center))
+```
+
+```{r}
+# create perturbed df where each day is perturbed by a sinusodial wave
+# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
+# sin_date is 1 times the sin of date_num
+model.df %>%
+  group_by(obs_date) %>%
+  mutate(date_num = as.numeric(as.Date(obs_date)),
+         pert_val = amp*sin(freq*date_num)) %>%
+  ungroup() %>%
+  mutate(rv_pert_center = rv_center + pert_val) %>%
+  group_by(obs_date) %>%
+  summarize( mean_rv_center = mean(rv_pert_center), sd_rv_center = sd(rv_pert_center)/sqrt(309) ) %>%
+  ungroup() %>%
+  mutate(date = as.Date(obs_date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_rv_center)) +
+  geom_errorbar(aes(x = date, ymin = mean_rv_center - 1.96*sd_rv_center, ymax = mean_rv_center + 1.96*sd_rv_center), color = "black")
+```
+
+
+
+```{r}
+rm(amp, freq)
+```
+
+
+
+
+# Density plot for rv
+
+```{r}
+ggplot(model.df, aes(rv)) +
+  geom_histogram()
+```
+
+```{r}
+ggplot(model.df, aes(centered_rv)) +
+  geom_histogram(bins = 100)
+```
+
+```{r}
+ggplot(model.df, aes(scale_rv)) +
+  geom_histogram(bins = 100)
+```
+
+# hg1 and rv plots
+
+measured hg1 and rv (not centered by line)
+```{r}
+model.df %>%
+  #filter(wavelength<8600) %>%
+  ggplot(mapping = aes(x=hg_1, y=rv, color = wavelength)) +
+  geom_point(alpha=.2)
+```
+measured hg1 and rv (centered by line)
+```{r}
+model.df %>%
+  #filter(wavelength<8600) %>%
+  ggplot(mapping = aes(x=hg_1_center, y=rv_center, color = wavelength)) +
+  geom_point(alpha=.2)
+```
+measured hg1 and rv (centered by line, high wavelengths removed)
+```{r}
+model.df %>%
+  filter(wavelength<8600) %>%
+  ggplot(mapping = aes(x=hg_1_center, y=rv_center, color = wavelength)) +
+  geom_point(alpha=.2) +
+  xlim(-.005,.005)
+```
+*possible outlier for hg_1_center*
+```{r}
+model.df %>% filter(wavelength<8600) %>% filter(hg_1_center > .004)
+```
+
+fitting individual lm's on specific lines hg1 v rv
+```{r}
+i = 301
+
+hg1.lm = lm(rv_center ~ hg_1_center, model.df %>% filter(lam_order == final_lams_orders[i] ) )
+model.df %>%
+  filter(lam_order == final_lams_orders[i] ) %>%
+  ggplot(mapping = aes(x=hg_1_center, y=rv_center)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+
+```{r}
+i = 150
+
+hg1.lm = lm(rv_center ~ hg_1_center, model.df %>% filter(lam_order == final_lams_orders[i] ) )
+model.df %>%
+  filter(lam_order == final_lams_orders[i] ) %>%
+  ggplot(mapping = aes(x=hg_1_center, y=rv_center)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+```{r}
+rm(hg1.lm, hg2.lm, i)
+```
+
+
+# scatter plots depth for two lines + correlation
 
 ```{r}
 lam1 = "5298.152_58"
 lam2 = final_lams_orders[2]
 
-df = final_fits %>%
-  filter( lambda_order == lam1 | lambda_order == lam2 ) %>%
-  pivot_wider(id_cols = "obs_date", names_from = "lambda_order", values_from = "depth1", names_prefix = "depth_")
+df = model.df %>%
+  filter( lam_order == lam1 | lam_order == lam2 ) %>%
+  pivot_wider(id_cols = "obs_date", names_from = "lam_order", values_from = "depth1", names_prefix = "depth_")
 
 df %>% ggplot(mapping = aes(x = !!sym( str_c("depth_",lam1) ), y = !!sym( str_c("depth_",lam2) ) ) ) +
   geom_point()
@@ -230,14 +402,14 @@ print( cor( df %>% dplyr::select(!(obs_date)), method = "spearman")[1,2] )
 ```
 
 ```{r}
-final_fits %>%
+model.df %>%
   mutate(obs_date = as.Date(obs_date)) %>%
-  filter( lambda_order == lam1 | lambda_order == final_lams_orders[2] | lambda_order == "5248.496_57" | lambda_order == final_lams_orders[120]) %>%
-  group_by(lambda_order) %>%
+  filter( lam_order == lam1 | lam_order == final_lams_orders[2] | lam_order == "5248.496_57" | lam_order == final_lams_orders[120]) %>%
+  group_by(lam_order) %>%
   mutate(mean_depth = mean(depth1), sd_depth = sd(depth1)) %>%
   ungroup() %>%
   mutate(std_depth = (depth1 - mean_depth)/sd_depth  ) %>%
-  ggplot(mapping = aes(x = obs_date, y = std_depth, color = lambda_order)) +
+  ggplot(mapping = aes(x = obs_date, y = std_depth, color = lam_order)) +
   geom_point()
 ```
 
@@ -245,9 +417,9 @@ final_fits %>%
 lam1 = "9212.524_107"
 lam2 = "9572.503_110"
 
-df = final_fits %>%
-  filter( lambda_order == lam1 | lambda_order == lam2 ) %>%
-  pivot_wider(id_cols = "obs_date", names_from = "lambda_order", values_from = "depth1", names_prefix = "depth_")
+df = model.df %>%
+  filter( lam_order == lam1 | lam_order == lam2 ) %>%
+  pivot_wider(id_cols = "obs_date", names_from = "lam_order", values_from = "depth1", names_prefix = "depth_")
 
 df %>% ggplot(mapping = aes(x = !!sym( str_c("depth_",lam1) ), y = !!sym( str_c("depth_",lam2) ) ) ) +
   geom_point()
@@ -257,57 +429,35 @@ print( cor( df %>% dplyr::select(!(obs_date)), method = "spearman")[1,2] )
 ```
 
 ```{r}
-final_fits %>%
+model.df %>%
   mutate(obs_date = as.Date(obs_date)) %>%
-  filter( lambda_order == lam1 | lambda_order == lam2 |lambda_order == "9292.992_108" ) %>%
-  group_by(lambda_order) %>%
+  filter( lam_order == lam1 | lam_order == lam2 |lam_order == "9292.992_108" ) %>%
+  group_by(lam_order) %>%
   mutate(mean_depth = mean(depth1), sd_depth = sd(depth1)) %>%
   ungroup() %>%
   mutate(std_depth = (depth1 - mean_depth)/sd_depth  ) %>%
-  ggplot(mapping = aes(x = obs_date, y = std_depth, color = lambda_order)) +
+  ggplot(mapping = aes(x = obs_date, y = std_depth, color = lam_order)) +
   geom_point()
 ```
-
-
 
 ```{r}
 rm(lam1,lam2,df)
 ```
 
 
-## deviation from mean rv scatter plots
-
-```{r}
-final_fits %>%
-  filter(round(lambda,3) == 4662.822)
-```
-
-
-```{r}
-final_fits %>%
-  filter(round(lambda,3) == 4662.822) %>% 
-  dplyr::select(lambda,order_idx, obs_date, gh_0) %>%
-  pivot_wider(names_from = order_idx, values_from = gh_0) %>%
-  ggplot() +
-  geom_point(mapping = aes(x=!!sym("42"),y=!!sym("43" )))
-```
-
+# deviation from mean rv scatter plots
 
 RV deviations
 ```{r}
 # get deviation from mean rv for each line that appears on two orders
-dev.df = final_fits %>%
-  mutate( lambda = factor(round(lambda,3)) ) %>%
+dev.df = model.df %>%
+  # this line had problematic measurements for one of its orders, so remove it
+  filter(lambda != 4662.822) %>%
   filter(repeat_order == T) %>%
   group_by( lambda ) %>%
   mutate( mean_rv = mean(rv) ) %>%
   ungroup() %>%
   mutate(dev_rv = rv - mean_rv)
-```
-
-```{r}
-dev.df %>%
-  filter(lambda == "4662.822")
 ```
 
 ```{r}
@@ -345,14 +495,16 @@ for ( i in c( 1:(length(seq_rep_lam)-1)  )  ) {
   )
 }
 ```
+
 Single lines:
+
 
 ```{r}
 dev.df %>%
-  filter(lambda == "4459.485") %>%
+  filter(lambda == "4182.925") %>%
   ggplot(mapping = aes(x=order_1, y=order_2)) +
   geom_point() +
-  ggtitle("4459.485")
+  ggtitle("4182.925")
 ```
 
 
@@ -372,93 +524,80 @@ dev.df %>%
   ggtitle("6167.045")
 ```
 
-## Density plot for rv
-
 ```{r}
-#png(filename="rv_hist.png")
-ggplot(final_fits, aes(rv)) +
-  geom_histogram()
-
-
-#dev.off()
+rm(dev.df, rep_lams, seq_rep_lam, i)
 ```
 
-## avg rv by observation date
+
+# avg snr by observation date
 
 ```{r}
-#png(filename="rv_time.png")
-final_fits %>%
-  group_by(obs_date) %>%
-  summarize(avg_rv = mean(rv)) %>%
-  ggplot(mapping = aes(x = obs_date, y = avg_rv)) +
-  geom_point()
-
-#dev.off()
-```
-
-## avg snr by observation date
-
-```{r}
-final_fits %>%
+model.df %>%
   group_by(obs_date) %>%
   summarize(avg_snr = mean(snr)) %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
   ggplot(mapping = aes(x = obs_date, y = avg_snr)) +
   geom_point()
 ```
 
 
-## b1 measurements
+# b1 measurements
+
+
+
 
 ```{r}
-summary(final_fits$b1)
+summary(model.df$b1)
 ```
 
 density of b1
 
 ```{r}
-ggplot(final_fits, aes(b1)) +
+ggplot(model.df, aes(b1)) +
   geom_density()
 ```
 
 ```{r}
-final_fits %>%
+model.df %>%
   group_by(obs_date) %>%
   summarize(avg_b1 = mean(b1)) %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
   ggplot(mapping = aes(x = obs_date, y = avg_b1)) +
   geom_point()
 ```
 
-## a1 (slope) measurements
+# a1 (slope) measurements
 
 quantiles of a1
 
 ```{r}
-summary(final_fits$a1)
+summary(model.df$a1)
 ```
 
 density of a1
 
 ```{r}
-ggplot(final_fits, aes(a1)) +
+ggplot(model.df, aes(a1)) +
   geom_density()
 ```
 
 avg a1 by observation date
 
 ```{r}
-final_fits %>%
+model.df %>%
   group_by(obs_date) %>%
   summarize(avg_a1 = mean(a1)) %>%
+  mutate(obs_date = as.Date(obs_date)) %>%
   ggplot(mapping = aes(x = obs_date, y = avg_a1)) +
   geom_point()
 ```
 
 
-rv by b1
+# rv by b1
 
 ```{r}
 #png(filename="rv_b1.png")
-final_fits %>%
+model.df %>%
   ggplot(mapping = aes(x = b1, y = rv, color = lambda)) +
   geom_point()
 
@@ -469,8 +608,8 @@ final_fits %>%
 *b1 and lambda non singularity issue*
 
 ```{r}
-final_fits %>%
-  filter(lambda==final_lams[77] | lambda==final_lams[23]) %>%
+model.df %>%
+  filter(lambda==final.lams[77] | lambda==final.lams[23]) %>%
   dplyr::select(lambda, a1, b1)
 ```
 
@@ -479,17 +618,17 @@ b1 over time for various lines
 ```{r, fig.width = 6, fig.height = 3}
 k = 1
 
-plot1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 
-plot2 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot2 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 #png(filename="samp1.png", width=1000, height=500)
@@ -502,17 +641,17 @@ grid.arrange(plot1, plot2, ncol=2)
 ```{r, fig.width = 6, fig.height = 3}
 k = 10
 
-plot1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 
-plot2 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot2 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 # png(filename="samp2.png", width=1000, height=500)
@@ -525,17 +664,17 @@ grid.arrange(plot1, plot2, ncol=2)
 ```{r, fig.width = 6, fig.height = 3}
 k = 50
 
-plot1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 
-plot2 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot2 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 # png(filename="samp3.png", width=1000, height=500)
@@ -549,17 +688,17 @@ grid.arrange(plot1, plot2, ncol=2)
 ```{r, fig.width = 6, fig.height = 3}
 k = 100
 
-plot1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 
-plot2 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot2 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 # png(filename="samp4.png", width=1000, height=500)
@@ -573,17 +712,17 @@ grid.arrange(plot1, plot2, ncol=2)
 ```{r, fig.width = 6, fig.height = 3}
 k = 150
 
-plot1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 
-plot2 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot2 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 # png(filename="samp5.png", width=1000, height=500)
@@ -597,17 +736,17 @@ grid.arrange(plot1, plot2, ncol=2)
 ```{r, fig.width = 6, fig.height = 3}
 k = 240
 
-plot1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = b1, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 
-plot2 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+plot2 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx))) +
-  ggtitle(final_lams[k]) +
+  ggtitle(final.lams[k]) +
   geom_point()
 
 # png(filename="samp6.png", width=1000, height=500)
@@ -617,15 +756,15 @@ plot2 = final_fits %>%
 grid.arrange(plot1, plot2, ncol=2)
 ```
 
-## variance over orders and over time for repeated measurements
+# variance over orders and over time for repeated measurements
 
 RV for a specific line by observation date
 
 ```{r}
 k = 11
 
-df1 = final_fits %>%
-  filter(lambda==final_lams[k]) %>%
+df1 = model.df %>%
+  filter(lambda==final.lams[k]) %>%
   dplyr::select(order_idx,obs_date,rv) %>%
   mutate(order_idx = factor(order_idx))
 df1
@@ -635,7 +774,7 @@ df1
 df1 %>%
   ggplot(mapping = aes(x = obs_date, y = rv, color = factor(order_idx) ) ) +
   geom_point() +
-  ggtitle(final_lams[k])
+  ggtitle(final.lams[k])
 ```
 
 ```{r}
@@ -667,7 +806,7 @@ RV's for each line over time and over order
 
 ```{r}
 # calculate variance across time pooled over order
-sd_order = final_fits %>%
+sd_order = model.df %>%
   filter(repeat_order == T) %>%
   dplyr::select(lambda, order_idx, obs_date, rv) %>%
   group_by(lambda, order_idx) %>%
@@ -680,7 +819,7 @@ sd_order
 
 ```{r}
 # calculate variance across order pooled over time
-sd_time = final_fits %>%
+sd_time = model.df %>%
   filter(repeat_order == T) %>%
   dplyr::select(lambda, order_idx, obs_date, rv) %>%
   group_by(lambda, obs_date) %>%
@@ -705,7 +844,7 @@ var_final %>%
   geom_abline(slope=1,intercept=0,linetype = 2)
 ```
 
-### difference across order
+# difference across orders helper function
 
 ```{r}
 # helper "difference" function
@@ -714,7 +853,7 @@ diff = function(x) { abs(x[2] - x[1]) }
 
 
 ```{r}
-final_fits %>%
+model.df %>%
   filter(repeat_order == T) %>%
   dplyr::select(lambda, order_idx, obs_date, rv) %>%
   group_by(lambda, obs_date) %>%

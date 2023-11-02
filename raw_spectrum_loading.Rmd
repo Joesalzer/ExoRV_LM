@@ -1,0 +1,396 @@
+---
+title: "NEID Solar Data -- loading raw spectra"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(MASS)
+library(rhdf5)
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/raw_spectrum_files/"
+```
+
+# Loading data
+
+## function to open a solar_spectrum file
+
+```{r}
+## load a "solar_spectrum_DATE.h5" file into a dataframe ##
+
+
+load.solarfile = function(spectra_name) {
+  
+  # download solar spectrum, with flux, flux_norm, lambda, var, and var_norm
+  # (pixels,order_idx)
+  solar_spectrum = H5Fopen(str_c(wd_data, spectra_name))
+  
+  # number of pixels and orders
+  num_pixels = dim(solar_spectrum$flux)[1]
+  num_orders = dim(solar_spectrum$flux)[2]
+  
+  # vector of orders and pixels
+  orders = seq(1,num_orders)
+  pixels = seq(1,num_pixels)
+  
+  # create dataframe for orders and pixels
+  solar_spectrum.df = expand_grid(order = orders, pixel = pixels)
+  # set columns
+  solar_spectrum.df$flux_norm = as.vector(solar_spectrum$flux_norm)
+  solar_spectrum.df$flux = as.vector(solar_spectrum$flux)
+  solar_spectrum.df$lambda = as.vector(solar_spectrum$lambda)
+  solar_spectrum.df$var = as.vector(solar_spectrum$var)
+  solar_spectrum.df$var_norm = as.vector(solar_spectrum$var_norm)
+  solar_spectrum.df$date = as.Date( str_split_1(spectra_name,"_")[3] )
+  
+  return(solar_spectrum.df)
+  
+}
+```
+
+```{r}
+load.solarfile("solar_spectrum_2021-01-01.h5")
+```
+
+```{r}
+drop_na(load.solarfile("solar_spectrum_2021-01-01.h5"))
+```
+
+## function to open a line file
+
+```{r}
+## load a "line_LINE_ORDER.h5: file into a dataframe ##
+
+
+load.linefile = function(line_name) {
+  # download a single line
+  # (pixels,date)
+  single_line = H5Fopen(str_c(wd_data, line_name))
+  
+  # vector of dates
+  dates = as.Date(single_line$dates)
+  # vector of pixels
+  pixels = as.numeric( str_split_1(single_line$pixels,":") )
+  pixels = seq(pixels[1],pixels[2])
+  
+  # create dataframe for dates and pixels
+  single_line.df = expand_grid(date = dates, pixel = pixels )
+  # set columns
+  single_line.df$flux = as.vector( single_line$flux)
+  single_line.df$flux_norm = as.vector( single_line$flux_norm)
+  single_line.df$lambda = as.vector( single_line$lambda) 
+  single_line.df$var = as.vector( single_line$var)
+  single_line.df$var_norm = as.vector( single_line$var_norm)
+  single_line.df$lambdac_fit = single_line$lambdac_fit
+  single_line.df$lambdac_vald = single_line$lambdac_vald
+  #single_line.df$pixels = single_line$pixels
+  single_line.df$order_idx = single_line$order_idx
+  single_line.df$prder_phys = single_line$order_phys
+  single_line.df$deltav = single_line$deltav
+  
+  return(single_line.df)
+}
+```
+
+
+```{r}
+load.linefile("line_3895.58333_17.h5")
+```
+
+## file lists
+
+```{r}
+# list of files in raw_spectrum_files
+file_list = list.files("raw_spectrum_files")
+```
+
+```{r}
+# list of solar spectrum files
+solarspectrum_list = file_list[!is.na( str_extract(file_list,"solar_spectrum") )]
+# get dates for solar spectrum
+all_dates = str_sub( str_split_fixed(solarspectrum_list,"_",n=3)[,3], end = -4 )
+```
+
+```{r}
+# list of line files
+line_list = file_list[!is.na( str_extract(file_list,"line") )]
+# get line-orders 
+all_lineorders = str_sub( str_split_fixed(line_list,"_",n=2)[,2], end = -4 )
+```
+
+## load all line files
+
+```{r}
+# # write csv for all lines
+# all_lines.df = line_list %>%
+#   lapply(load.linefile) %>%
+#   bind_rows
+# 
+# write.csv(all_lines.df ,"all_lines.csv")
+```
+
+```{r}
+# # read all lines
+# all_lines.df = read.csv("all_lines.csv")
+```
+
+```{r}
+# head(all_lines.df)
+```
+
+```{r}
+# rm(all_lines.df)
+```
+
+## open a single solar_spectrum file
+
+```{r}
+# assign spectrum name
+# spectra_name = "solar_spectrum_2021-01-01.h5"
+```
+
+9216 pixels, 122 orders
+```{r}
+# download solar spectrum, with flux, flux_norm, lambda, var, and var_norm
+# (pixels,order_idx)
+# solar_spectrum = H5Fopen(str_c(wd_data, spectra_name))
+# solar_spectrum
+```
+
+```{r}
+# solar_spectrum$flux_norm[1:6,1:10]
+```
+
+```{r}
+# number of pixels and orders
+# num_pixels = dim(solar_spectrum$flux)[1]
+# num_orders = dim(solar_spectrum$flux)[2]
+```
+
+```{r}
+# vector of orders and pixels
+#orders = seq(1,num_orders) %>% map_chr( \(x) str_c("order",x) )
+# orders = seq(1,num_orders)
+# pixels = seq(1,num_pixels)
+```
+
+```{r}
+# create dataframe for orders and pixels
+# solar_spectrum.df = expand_grid(order = orders, pixel = pixels)
+# set columns
+# solar_spectrum.df$flux_norm = as.vector(solar_spectrum$flux_norm)
+# solar_spectrum.df$flux = as.vector(solar_spectrum$flux)
+# solar_spectrum.df$lambda = as.vector(solar_spectrum$lambda)
+# solar_spectrum.df$var = as.vector(solar_spectrum$var)
+# solar_spectrum.df$var_norm = as.vector(solar_spectrum$var_norm)
+```
+
+```{r}
+# remove some vectors
+#rm(orders, pixels, num_orders, num_pixels)
+```
+
+## open a single pixel lines
+
+```{r}
+# line_name = "line_5286.07101_58.h5"
+
+# line_name = "line_4966.30631_50.h5"
+```
+
+```{r}
+# # download a single line
+# # # (pixels,date)
+# single_line = H5Fopen(str_c(wd_data, line_name))
+# single_line
+```
+
+```{r}
+# # vector of dates
+# dates = as.Date(single_line$dates)
+# # vector of pixels
+# pixels = as.numeric( str_split_1(single_line$pixels,":") )
+# pixels = seq(pixels[1],pixels[2])
+```
+
+```{r}
+# # create dataframe for dates and pixels
+# single_line.df = expand_grid(date = dates, pixel = pixels )
+# # set columns
+# single_line.df$flux = as.vector( single_line$flux)
+# single_line.df$flux_norm = as.vector( single_line$flux_norm)
+# single_line.df$lambda = as.vector( single_line$lambda) 
+# single_line.df$var = as.vector( single_line$var)
+# single_line.df$var_norm = as.vector( single_line$var_norm) 
+```
+
+# read solar spectra and single line
+
+
+```{r}
+length(solarspectrum_list)
+length(line_list)
+```
+
+```{r}
+# example solar spectrum
+solar_spectrum.df = load.solarfile( solarspectrum_list[100] )
+single_line.df = load.linefile( line_list[40] )
+```
+
+###solar_spectrum
+
+```{r}
+summary( solar_spectrum.df )
+```
+
+
+### single_line
+
+```{r}
+summary(single_line.df)
+```
+
+# Figures
+
+## solar spectrum
+
+###flux (or flux norm) by lambda for a given order
+
+```{r}
+solar_spectrum.df %>%
+  filter(order == single_line.df$order_idx[1])
+```
+
+```{r}
+solar_spectrum.df %>%
+  filter(order == single_line.df$order_idx[1]) %>%
+  #ggplot(mapping = aes(x = lambda, y = flux)) +
+  ggplot(mapping = aes(x = pixel, y = flux)) +
+  geom_point() +
+  ggtitle(str_c("order ",single_line.df$order_idx[1]))
+```
+
+
+### line file on the spectrum
+
+```{r}
+# lower and upper pixel
+pixel_lower = min(single_line.df$pixel)
+pixel_upper = max(single_line.df$pixel)
+```
+
+lines on lambdac_fit and lambdac_vald
+
+```{r}
+single_line.df %>%
+  filter(date == "2022-03-22") %>%
+  ggplot() +
+  geom_point(mapping = aes(x=lambda,y=flux_norm)) +
+  geom_vline(xintercept = single_line.df$lambdac_fit[1], color = "orange") +
+  geom_vline(xintercept = single_line.df$lambdac_vald[1], color = "purple")
+```
+lines on pixels
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-03") %>%
+  ggplot() +
+  geom_point(mapping = aes(x=pixel,y=flux_norm)) +
+  geom_vline(xintercept = pixel_lower + 50, color = "orange") +
+  geom_vline(xintercept = pixel_upper - 50, color = "orange")
+  #geom_vline(xintercept = single_line$lambdac_vald, color = "purple")
+```
+
+```{r}
+solar_spectrum.df %>%
+  filter(order == single_line.df$order_idx[1],
+         pixel >= pixel_lower - 50,
+         pixel <= pixel_upper + 50) %>%
+  ggplot(mapping = aes(x = lambda, y = flux_norm)) +
+  geom_vline(xintercept = (single_line.df %>% filter(date == "2021-01-01", pixel == pixel_lower))$lambda) +
+  geom_vline(xintercept = (single_line.df %>% filter(date == "2021-01-01", pixel == pixel_upper))$lambda) +
+  geom_point()
+```
+
+
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-01" | date =="2021-08-02") %>%
+  ggplot() +
+  geom_point( mapping = aes(x=pixel,y=flux_norm, color = date) )
+```
+
+```{r}
+#rm(pixel_lower, pixel_upper)
+```
+
+### difference b/w dates
+
+```{r}
+
+```
+
+
+
+## single line
+
+```{r}
+single_line.df%>%
+  filter(pixel <= pixel_upper-40) %>%
+  filter(pixel >= pixel_lower+40)
+```
+
+
+```{r}
+single_line.df%>%
+  #filter(pixel <= pixel_upper+50) %>%
+  #filter(pixel >= pixel_lower-50) %>%
+  filter(pixel <= pixel_upper-40) %>%
+  filter(pixel >= pixel_lower+40) %>%
+  mutate(date = as.Date(date)) %>%
+  ggplot(mapping = aes(x = date, y = flux_norm, color = pixel, group = pixel)) +
+  geom_point()
+```
+
+```{r}
+single_line.df%>%
+  filter(pixel <= pixel_upper-40) %>%
+  filter(pixel >= pixel_lower+40) %>%
+  mutate(date = as.Date(date)) %>%
+  dplyr::select(date, pixel, flux_norm) %>%
+  pivot_wider(names_from = pixel, values_from = flux_norm, names_prefix = "pixel") %>%
+  dplyr::select(!date) %>%
+  cor()
+  
+```
+
+## plotting bad lambdas
+
+bad-lams: 4294.734 4459.485 4584.393 4845.84  4888.541
+```{r}
+all_lines.df %>% filter(lambdac_vald > 4845, lambdac_vald < 4846) %>% count(lambdac_vald)
+```
+
+lambdac_vald new line ids
+4294.734 -> 4294.734
+4584.393 -> 4584.403
+4845.84 -> 4845.85
+
+
+```{r}
+all_lines.df %>% 
+  filter(lambdac_vald > 4845, lambdac_vald < 4846) %>%
+  filter(date == "2021-01-01") %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = flux, color = order_idx))
+```
+
+
+
