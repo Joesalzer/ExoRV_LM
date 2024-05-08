@@ -1,0 +1,416 @@
+---
+title: "NEID Solar Data -- loading raw spectra"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(MASS)
+library(rhdf5)
+library(dtw)
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/raw_spectrum_files/"
+```
+
+# Loading data
+
+see raw_spectrum_loading for these functions, update there as well if these functions need updating
+
+## function to open a solar_spectrum file
+
+```{r}
+## load a "solar_spectrum_DATE.h5" file into a dataframe ##
+
+
+load.solarfile = function(spectra_name) {
+  
+  # download solar spectrum, with flux, flux_norm, lambda, var, and var_norm
+  # (pixels,order_idx)
+  solar_spectrum = H5Fopen(str_c(wd_data, spectra_name))
+  
+  # number of pixels and orders
+  num_pixels = dim(solar_spectrum$flux)[1]
+  num_orders = dim(solar_spectrum$flux)[2]
+  
+  # vector of orders and pixels
+  orders = seq(1,num_orders)
+  pixels = seq(1,num_pixels)
+  
+  # create dataframe for orders and pixels
+  solar_spectrum.df = expand_grid(order = orders, pixel = pixels)
+  # set columns
+  solar_spectrum.df$flux_norm = as.vector(solar_spectrum$flux_norm)
+  solar_spectrum.df$flux = as.vector(solar_spectrum$flux)
+  solar_spectrum.df$lambda = as.vector(solar_spectrum$lambda)
+  solar_spectrum.df$var = as.vector(solar_spectrum$var)
+  solar_spectrum.df$var_norm = as.vector(solar_spectrum$var_norm)
+  solar_spectrum.df$date = as.Date( str_split_1(spectra_name,"_")[3] )
+  
+  return(solar_spectrum.df)
+  
+}
+```
+
+```{r}
+load.solarfile("solar_spectrum_2021-01-01.h5")
+```
+
+```{r}
+drop_na(load.solarfile("solar_spectrum_2021-01-01.h5"))
+```
+
+## function to open a line file
+
+```{r}
+## load a "line_LINE_ORDER.h5: file into a dataframe ##
+
+
+load.linefile = function(line_name) {
+  # download a single line
+  # (pixels,date)
+  single_line = H5Fopen(str_c(wd_data, line_name))
+  
+  # vector of dates
+  dates = as.Date(single_line$dates)
+  # vector of pixels
+  pixels = as.numeric( str_split_1(single_line$pixels,":") )
+  pixels = seq(pixels[1],pixels[2])
+  
+  # create dataframe for dates and pixels
+  single_line.df = expand_grid(date = dates, pixel = pixels )
+  # set columns
+  single_line.df$flux = as.vector( single_line$flux)
+  single_line.df$flux_norm = as.vector( single_line$flux_norm)
+  single_line.df$lambda = as.vector( single_line$lambda) 
+  single_line.df$var = as.vector( single_line$var)
+  single_line.df$var_norm = as.vector( single_line$var_norm)
+  single_line.df$lambdac_fit = single_line$lambdac_fit
+  single_line.df$lambdac_vald = single_line$lambdac_vald
+  #single_line.df$pixels = single_line$pixels
+  single_line.df$order_idx = single_line$order_idx
+  single_line.df$prder_phys = single_line$order_phys
+  single_line.df$deltav = single_line$deltav
+  
+  return(single_line.df)
+}
+```
+
+
+```{r}
+load.linefile("line_5341.92374_59.h5")
+```
+
+## file lists
+
+```{r}
+# list of files in raw_spectrum_files
+file_list = list.files(wd_data)
+```
+
+```{r}
+# list of solar spectrum files
+solarspectrum_list = file_list[!is.na( str_extract(file_list,"solar_spectrum") )]
+# get dates for solar spectrum
+all_dates = str_sub( str_split_fixed(solarspectrum_list,"_",n=3)[,3], end = -4 )
+```
+
+```{r}
+# list of line files
+line_list = file_list[!is.na( str_extract(file_list,"line") )]
+# get line-orders 
+all_lineorders = str_sub( str_split_fixed(line_list,"_",n=2)[,2], end = -4 )
+```
+
+```{r}
+#total number of solar spectrum_list and line_list
+length(solarspectrum_list)
+length(line_list)
+```
+
+# read single line
+
+
+```{r}
+# example single line
+single_line.df = load.linefile("line_5341.92374_59.h5")
+```
+
+```{r}
+single_line.df
+```
+
+## summary
+
+```{r}
+summary(single_line.df)
+```
+
+# Figures: line file on the spectrum
+
+```{r}
+# lower and upper pixel
+pixel_lower = min(single_line.df$pixel)
+pixel_upper = max(single_line.df$pixel)
+pixel_lower
+pixel_upper
+```
+
+display line on a single day, with a smooth line and points as normalized flux by wavelength
+
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-01") %>%
+  ggplot(mapping = aes(x=lambda, y=flux_norm)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-01") %>%
+  filter(pixel > pixel_lower + 20,
+         pixel < pixel_upper - 20) %>%
+  ggplot(mapping = aes(x=lambda, y=flux_norm)) +
+  geom_point() +
+  geom_line()
+```
+
+
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-01") %>%
+  filter(pixel > pixel_lower + 20,
+         pixel < pixel_upper - 20) %>%
+  ggplot(mapping = aes(x=lambda, y=flux_norm)) +
+  geom_smooth(span = .08, se = F) +
+  geom_point()
+```
+
+display two days at once
+
+```{r}
+single_line.df %>%
+  filter(date == "2021-01-01" | date == "2021-06-02") %>%
+  ggplot(mapping = aes(x=lambda, y=flux_norm, color = date, group = date)) +
+  geom_point()
+```
+
+
+
+
+display two days at once (with added shift)
+
+```{r}
+# amount of shift, in Angstroms
+shift = 0.0001835039
+
+single_line.df %>%
+  mutate(lambda = ifelse(date == "2021-06-02", lambda + shift, lambda)) %>%
+  filter(date == "2021-01-01" | date == "2021-06-02") %>%
+  ggplot(mapping = aes(x=lambda, y=flux_norm, color = date, group = date)) +
+  geom_point()
+
+rm(shift)
+```
+
+# DTW
+
+```{r}
+day1spectra = single_line.df %>% filter(date =="2021-01-01")
+day2spectra = single_line.df %>% filter(date =="2021-06-02")
+```
+
+```{r}
+day1spectra = single_line.df %>% filter(date =="2021-01-01")
+day2spectra = single_line.df %>% filter(date =="2021-01-03")
+```
+
+No Smoothing:
+```{r}
+# Find the best match with the normal recursion formula
+alignment = dtw(day1spectra$flux_norm,day2spectra$flux_norm,keep=TRUE)
+
+# the warping curve, i.e. the alignment curve
+plot(alignment,type="threeway")
+
+# alignment, no smoothing
+plot(alignment,type="twoway",offset=-1)
+```
+
+Smoothing:
+```{r}
+# Find the best match with the normal recursion formula
+alignment = dtw(day1spectra$flux_norm,day2spectra$flux_norm,keep=TRUE,step=rabinerJuangStepPattern(6,"c"))
+
+# the warping curve, i.e. the alignment curve
+plot(alignment,type="threeway")
+
+# alignment, no smoothing
+plot(alignment,type="twoway",offset=-1)
+```
+
+Shifts based on lambda:
+
+
+```{r}
+day1spectra$lambda[alignment$index1] - day2spectra$lambda[alignment$index2]
+```
+
+Shifts based on pixel:
+
+```{r}
+day1spectra$pixel[alignment$index1] - day2spectra$pixel[alignment$index2]
+```
+
+
+```{r}
+# lambda shift
+lam_shift = 0.0001835039
+
+summary(
+  day1spectra$lambda[alignment$index1] - (day2spectra$lambda + lam_shift)[alignment$index2]
+)
+```
+
+
+```{r}
+#summary( day1spectra$lambda[alignment$index1] - (day1spectra$lambda+lam_shift)[alignment$index2] )
+```
+
+
+```{r}
+# pixel shift
+pixel_shift = 0.024
+
+summary(
+  day1spectra$pixel[alignment$index1] - (day2spectra$pixel + pixel_shift)[alignment$index2]
+)
+```
+
+
+
+# DTW test
+
+```{r}
+# amount of shift between sin waves
+shift = .7
+```
+
+```{r}
+## NOISE ##
+set.seed(123)
+
+# number of sample points on each curve
+num.points = 50
+# a noisy gaussian wave as our two sequences
+idx1 = seq(from = -4, by = .2, length.out = num.points)
+idx2 = seq(from = -4, by = .21, length.out = num.points)
+seq1 = 1 - ( dnorm(idx1) + runif(num.points)/25 )
+seq2 = 1 - ( dnorm(idx2 + shift) + runif(num.points)/25 )
+```
+
+```{r}
+## NO NOISE ##
+
+# number of sample points on each curve
+num.points = 50
+# a gaussian wave as seq1 and seq2 with slightly different sampling periods
+idx1 = seq(from = -4, by = .2, length.out = num.points)
+idx2 = seq(from = -4, by = .21, length.out = num.points)
+seq1 = 1 - dnorm(idx1)
+seq2 = 1 - dnorm(idx2 + shift)
+```
+
+
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(x = idx1, y = seq1), color = "orange") +
+  geom_point(mapping = aes(x = idx2, y = seq2), color = "purple") +
+  ylab("flux") +
+  xlab("lambda")
+```
+
+## No Smoothing
+
+```{r}
+# Find the best match with the normal recursion formula
+alignment = dtw(seq1,seq2,keep=TRUE)
+
+# the warping curve, i.e. the alignment curve
+plot(alignment,type="threeway")
+
+# alignment, no smoothing
+plot(alignment,type="twoway",offset=-1)
+```
+
+top curve is seq1 bottom curve is seq2
+
+*no noise:*
+```{r}
+idx1[alignment$index1] - idx2[alignment$index2]
+```
+
+```{r}
+summary(idx1[alignment$index1] - idx2[alignment$index2])
+```
+
+*with noise:*
+
+```{r}
+idx1[alignment$index1] - idx2[alignment$index2]
+```
+
+```{r}
+summary(idx1[alignment$index1] - idx2[alignment$index2])
+```
+
+## Smoothing
+
+```{r}
+# Find the best match with smoothing
+alignment = dtw(seq1, seq2, keep=TRUE, step=rabinerJuangStepPattern(6,"c") )
+
+# the warping curve, i.e. the alignment curve
+plot(alignment,type="threeway")
+
+# alignment, no smoothing
+plot(alignment,type="twoway",offset=-1)
+```
+
+
+*no noise:*
+```{r}
+idx1[alignment$index1] - idx2[alignment$index2]
+```
+
+```{r}
+summary(idx1[alignment$index1] - idx2[alignment$index2])
+```
+
+*with noise:*
+
+```{r}
+idx1[alignment$index1] - idx2[alignment$index2]
+```
+
+```{r}
+summary(idx1[alignment$index1] - idx2[alignment$index2])
+```
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,455 @@
+---
+title: "NEID Solar Data -- Cross validation"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+```
+
+# Loading data
+
+```{r}
+# read data
+final.df = read_csv("/Users/josephsalzer/research/exostat/completeLines.csv")
+```
+
+```{r}
+colnames(final.df)
+```
+
+```{r}
+# convert line order and date into factors
+final.df = final.df %>%
+  mutate(line_order = factor(line_order),
+         date = as.Date(date))
+```
+
+```{r}
+# list of lambdas in final.df
+final.lams = ( final.df %>% group_by(lambdac_vald) %>% summarize(n. = n()) )$lambdac_vald
+length(final.lams)
+```
+
+```{r}
+# list of lamb-orders in model.df
+final.line_order = ( final.df %>% group_by(line_order) %>% summarize(n. = n()) )$line_order
+length(final.line_order)
+```
+
+```{r}
+# list of lambda-orders in model.df
+final.days =  ( final.df %>% group_by(date) %>% summarize(n. = n()) )$date 
+length(final.days)
+```
+
+# function to standardize data after we split
+
+```{r}
+# center and scale function
+centerFun = function(x, na.rm = FALSE) (x - mean(x, na.rm = na.rm))
+scaleFun = function(x, na.rm = FALSE) (x/sd(x, na.rm = na.rm))
+```
+
+We have to be careful when we remove values from our dataset. Our centering and scaling must be over the training set, and then the mean and sd of those datasets must be applied to the testing set.
+
+*standardize*
+current.df: dataframe to seperate into training and testing, with centering and scaling over the training set
+testIndex : index for left out days, integers
+
+also requires a final.days vector (date) in the environment, and a covars vector
+```{r}
+standardize = function(current.df, testIndex) {
+  
+  # create training data without a specific date
+  train = current.df %>% filter( !(date %in% final.days[testIndex]) )
+  # create testing data with the specific date
+  test = current.df %>% filter( date %in% final.days[testIndex] )
+  
+  # get means of our covariates per line (for trained days)
+  train.means = train %>%
+    group_by(line_order) %>%
+    summarize_at(covars,mean)
+  # get sds of our centered covariates (for trained days)
+  train.sds = train %>%
+    group_by(line_order) %>%
+    mutate_at(covars,centerFun) %>%
+    ungroup() %>%
+    summarize_at(covars,sd)
+  
+  # for train data, center covars by line, scale by the entire column
+  train = train %>%
+    group_by(line_order) %>%
+    mutate_at(covars,centerFun) %>%
+    ungroup() %>%
+    mutate_at(covars, scaleFun) %>%
+    rename_at(covars, ~ paste0(., '_center')) %>%
+    mutate(date = factor(date))
+  
+  ## CHECK SEVERAL TIMES TO MAKE SURE THIS WORKS ##
+  # normalize test data by means and sd of train data
+  test[,covars] = ( test[,covars] - train.means[ rep(seq_len(nrow(train.means)), each = length(testIndex)), -1] )
+  test[,covars] = test[,covars]/train.sds[rep(1,dim(test)[1]),]
+  
+  # rename columns of test set
+  test = test %>%
+    rename_at(covars, ~ paste0(., '_center')) %>%
+    mutate(date = factor(date))
+    
+  
+  return(list(train,test))
+}
+```
+
+## testing above function
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", "hg_coeff_1", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+```
+
+```{r}
+current.df = final.df %>%
+  filter(date_groups == 1) %>%
+  #mutate(date = factor(date)) %>%
+  dplyr::select( rv_template_0.5_change, date, line_order, all_of(covars) )
+current.df
+```
+
+
+
+```{r}
+testIndex = c(10:17)
+final.days[testIndex]
+```
+
+```{r}
+  # create training data without a specific date
+  train = current.df %>% filter( !(date %in% final.days[testIndex]) )
+  # create testing data with the specific date
+  test = current.df %>% filter( date %in% final.days[testIndex] )
+```
+
+```{r}
+
+```
+
+
+```{r}
+  # get means of our covariates per line (for trained days)
+  train.means = train %>%
+    group_by(line_order) %>%
+    summarize_at(covars,mean)
+  # get sds of our centered covariates (for trained days)
+  train.sds = train %>%
+    group_by(line_order) %>%
+    mutate_at(covars,centerFun) %>%
+    ungroup() %>%
+    summarize_at(covars,sd)
+```
+
+```{r}
+# for train data, center covars by line, scale by the entire column
+train = train %>%
+  group_by(line_order) %>%
+  mutate_at(covars,centerFun) %>%
+  ungroup() %>%
+  mutate_at(covars, scaleFun) %>%
+  rename_at(covars, ~ paste0(., '_center')) %>%
+  mutate(date = factor(date))
+```
+
+```{r}
+train.sds
+```
+
+```{r}
+train.means
+```
+
+```{r}
+# before normalization
+test
+```
+
+```{r}
+# after normalization
+test[,covars] = ( test[,covars] - train.means[ rep(seq_len(nrow(train.means)), each = length(testIndex)), -1] )
+test[,covars] = test[,covars]/train.sds[rep(1,dim(test)[1]),]
+test
+```
+
+```{r}
+head(train)
+head(test)
+```
+
+
+```{r}
+# compare to function output
+
+tt2 = standardize(current.df,testIndex)
+
+head(tt2[[1]])
+head(tt2[[2]])
+```
+
+# outlier lines
+```{r}
+summary(final.df$rv_template_0.5)
+rv.quantiles = quantile(final.df$rv_template_0.5, probs = c(.025,.05,.95,.975))
+rv.quantiles
+```
+
+```{r}
+outlier.lines = (
+  final.df %>%
+    filter(rv_template_0.5 < rv.quantiles[1] | rv_template_0.5 > rv.quantiles[4]) %>%
+    count(lambdac_vald) %>%
+    filter(n > 200)
+  )$lambdac_vald
+outlier.lines
+```
+
+
+# day-left out "cross validation"
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", "hg_coeff_1", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+```
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "thg_coeff_0", "thg_coeff_1", 
+             "thg_coeff_2", "thg_coeff_3", "thg_coeff_4", 
+             "thg_coeff_5", "thg_coeff_6", "thg_coeff_7", 
+             "thg_coeff_8", "thg_coeff_9", "thg_coeff_10")
+```
+
+```{r}
+# get rid of outlier lines
+current.df = final.df %>%
+  filter(!(lambdac_vald %in% outlier.lines)) %>%
+  mutate( line_order = droplevels(line_order) ) %>%
+  filter(date_groups == 1) %>%
+  dplyr::select( rv_template_0.5, date, line_order, all_of(covars) )
+head(current.df)
+```
+
+```{r}
+# get rid of outlier lines, with all days
+current.df = final.df %>%
+  filter(!(lambdac_vald %in% outlier.lines)) %>%
+  mutate( line_order = droplevels(line_order) ) %>%
+  dplyr::select( rv_template_0.5, date, line_order, all_of(covars) )
+head(current.df)
+```
+
+
+```{r}
+current.df = final.df %>%
+  mutate( line_order = droplevels(line_order) ) %>%
+  filter(date_groups == 1) %>%
+  dplyr::select( rv_template_0.5, date, line_order, all_of(covars) )
+head(current.df)
+```
+
+```{r}
+dayIndex = c(20:30)
+```
+
+```{r}
+trainAndTest = standardize(current.df,dayIndex)
+train.df = trainAndTest[[1]]
+test.df = trainAndTest[[2]]
+
+head(train.df)
+head(test.df)
+```
+
+
+```{r}
+# hg fit model
+currentlm = lm(rv_template_0.5 ~ date + line_order + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center +fit_gauss_sigmasq_center + hg_coeff_0_center + hg_coeff_2_center + hg_coeff_3_center + hg_coeff_4_center + hg_coeff_5_center + hg_coeff_6_center + hg_coeff_7_center, train.df )
+```
+
+```{r}
+# thg fit model
+currentlm = lm(rv_template_0.5 ~ fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center +fit_gauss_sigmasq_center + thg_coeff_0_center + thg_coeff_2_center + thg_coeff_3_center + thg_coeff_4_center + thg_coeff_5_center + thg_coeff_6_center + thg_coeff_7_center, train.df )
+```
+
+```{r}
+# adj.r.squared
+summary(currentlm)$adj.r.squared
+# RSE
+summary(currentlm)$sigma
+```
+
+*day index 20-30*
+adj.r.squared
+RSE
+
+hg model not removing outlier
+[1] 0.6565757
+[1] 20.06336
+
+hg model removing outlier
+[1] 0.535663
+[1] 9.094974
+
+thg model not removing outlier
+[1] 0.7486872
+[1] 17.16309
+
+thg model removing outlier
+[1] 0.7695273
+[1] 6.407588
+
+
+hg model removing outlier (date + line fixed effects, before fire days)
+[1] 0.5360034
+[1] 9.091639
+
+
+hg model removing outlier (date + line fixed effects, all days)
+[1] 0.7070052
+[1] 9.67412
+
+
+```{r}
+# get the data matrix of our test dataset, SAME FORM AS ABOVE MODEL WITHOUT DATE
+Xtest = model.matrix(rv_template_0.5 ~ line_order + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center +fit_gauss_sigmasq_center + hg_coeff_0_center + hg_coeff_2_center + hg_coeff_3_center + hg_coeff_4_center + hg_coeff_5_center + hg_coeff_6_center + hg_coeff_7_center, test.df)
+```
+
+```{r}
+# get rid of model coefficients associated with date
+model_coefs = currentlm$coefficients[ !startsWith( names(currentlm$coefficients), "date") ]
+model_coefs[is.na(model_coefs)] = 0
+# check if we can multiply our coefficients and data matrix to get predictions
+print( all( names(model_coefs) == colnames(Xtest) ) )
+```
+
+```{r}
+# get a prediction dataframe, comparing the modeled stellar RV to the dirty RV measurement
+pred.df = data.frame(
+  stellarRV = Xtest %*% model_coefs,
+  dirtyRV = test.df$rv_template_0.5
+)
+```
+
+```{r}
+pred.df %>%
+  ggplot(mapping = aes(x = dirtyRV, y= stellarRV)) +
+  geom_point() +
+  geom_abline(slope=1,intercept=0,linetype = 2)
+```
+
+```{r}
+summary(pred.df$dirtyRV)
+sd(pred.df$dirtyRV)
+#hist(pred.df$dirtyRV)
+```
+
+*day index 20-30*
+dirty rv spread not removing outlier
+     Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+-369.2628   -4.9515   -0.9958   -0.4509    2.7254  617.4727 
+[1] 28.72877
+
+dirty rv spread removing outlier
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+-134.295   -4.887   -1.014   -1.142    2.578  156.104 
+[1] 10.73223
+
+
+
+
+
+```{r}
+summary(pred.df$dirtyRV - pred.df$stellarRV)
+sd(pred.df$dirtyRV - pred.df$stellarRV)
+#hist(pred.df$dirtyRV - pred.df$stellarRV)
+```
+
+*day index 20-30*
+
+hg model not removing outlier
+     Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+-187.6057   -2.8097    0.6306    1.3144    4.3558  372.6924 
+sd: 15.10718
+
+hg model removing outlier
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+-86.6538  -2.2764   0.1661   0.1140   2.6831 100.1492 
+sd: 7.483515
+
+
+thg model not removing outlier
+     Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+-147.7133   -1.9289    0.9216    1.4794    3.9310  415.3289 
+sd: 13.05648
+
+thg model removing outlier
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+-56.6964  -1.3854   0.2523   0.4093   2.0394  73.6782 
+sd: 5.013267
+
+
+
+hg model removing outlier (date + line fixed effects, before fire days)
+
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+-90.2597  -2.6270  -0.1615  -0.2392   2.3506 103.1158 
+[1] 7.729729
+
+hg model removing outlier (date + line fixed effects, all days)
+
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+-95.590  -2.791  -0.375  -0.215   2.198  97.936 
+[1] 7.786557
+
+
+```{r}
+pred.df %>%
+  mutate(correctedRV = dirtyRV - stellarRV )
+```
+
+```{r}
+pred.df %>%
+  mutate(correctedRV = dirtyRV - stellarRV )
+```
+
+```{r}
+pred.df %>%
+  mutate(correctedRV = dirtyRV - stellarRV ) %>%
+  select(!stellarRV) %>%
+  pivot_longer(cols = c("dirtyRV","correctedRV"), names_to = "rvType", values_to = "rv") %>%
+  ggplot() +
+  geom_histogram(mapping = aes(x = rv)) +
+  facet_wrap(~rvType)
+```
+
+```{r}
+pred.df %>%
+  mutate(correctedRV = dirtyRV - stellarRV ) %>%
+  select(!stellarRV) %>%
+  pivot_longer(cols = c("dirtyRV","correctedRV"), names_to = "rvType", values_to = "rv") %>%
+  ggplot() +
+  geom_density(mapping = aes(x = rv, color =rvType))
+```
+
+

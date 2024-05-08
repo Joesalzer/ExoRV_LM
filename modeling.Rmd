@@ -221,8 +221,10 @@ scaledmodel.df = scaledmodel.df %>%
 ```
 
 ```{r}
-lm0 = lm(centered_rv ~ lam_order + obs_date , scaledmodel.df)
+lm0 = lm(rv_center ~ lam_order*b1_center + obs_date , model.df)
 ```
+
+
 
 ```{r}
 lm0 = lm(centered_rv ~ lam_order + obs_date , scaledmodel.df, weights = snr)
@@ -259,6 +261,10 @@ coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
                   estimate = summary(currentlm )$coefficients[,1],
                   se = summary(currentlm )$coefficients[,2],
                   pval = summary(currentlm )$coefficients[,4] )
+```
+
+```{r}
+coef.df
 ```
 
 ```{r}
@@ -725,6 +731,50 @@ plot(currentlm,which=2)
 ```{r}
 rm(currentlm, emmean.summary)
 ```
+
+## model for rv by hg1*line_order
+
+```{r}
+# the current linear model to be worked on
+currentlm = lm(rv_center ~ 0 + hg_1_center + lam_order*hg_1_center, model.df %>% filter(wavelength < 8600, wavelength != 5175.169) )
+```
+
+```{r}
+# dataframe of coefficients of currentlm 
+coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
+```
+
+```{r}
+coef.df
+```
+
+
+```{r}
+model.df %>%
+  filter(wavelength < 8600, wavelength != 5175.169) %>%
+  ggplot(mapping = aes(x = hg_1_center, y = rv_center)) +
+  geom_point()
+```
+
+## model with continuous time
+
+```{r}
+model.df = model.df %>% mutate(day = as.numeric(  as.Date(obs_date) ) )
+model.df
+```
+
+```{r}
+# the current linear model to be worked on
+currentlm = lm(rv_center ~ obs_date + I(obs_date^2) , model.df)
+```
+
+```{r}
+summary(currentlm)
+```
+
 
 # Variance inflation factor
 
@@ -1205,6 +1255,9 @@ rm(base.mdl, df.step, full.mdl, step.mdl, now, res)
 
 
 
+```{r}
+
+```
 
 
 

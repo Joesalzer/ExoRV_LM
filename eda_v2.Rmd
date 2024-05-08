@@ -1,0 +1,946 @@
+---
+title: "NEID Solar Data -- EDA"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+EDA for exostat, various visuals and summaries
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#library(FactoMineR)
+#library(GGally)
+source("readSpectra.R")
+# autocorrelation
+#library(collapse)
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/line_property_files/"
+```
+
+# Loading data
+
+```{r}
+# read data
+final.df = read_csv("/Users/josephsalzer/research/exostat/completeLines.csv")
+```
+
+```{r}
+# list of lambdas in final.df
+final_lams = ( final.df %>% group_by(lambdac_vald) %>% summarize(n. = n()) )$lambdac_vald
+length(final_lams)
+```
+
+```{r}
+# list of lambda-orders in final.df
+final_lams_orders = ( final.df %>% group_by(line_order) %>% summarize(n. = n()) )$line_order
+length(final_lams_orders)
+```
+
+```{r}
+# list of lambda-orders in final.df
+final_days = ( final.df %>% group_by(date) %>% summarize(n. = n()) )$date
+length(final_days)
+```
+
+# Data summaries
+
+```{r}
+# check how many line-order pairs there are
+final.df %>%
+  group_by(lambdac_vald, order_idx) %>%
+  count()
+```
+there are 910 line-order pairs, 345 observations per line-order pair
+
+
+*rv summary*
+```{r}
+summary(final.df$rv_template_0.5)
+```
+
+*change rv summary*
+```{r}
+final.df %>%
+  group_by(line_order) %>%
+  mutate(rv_template_0.5_change = changeFun(rv_template_0.5)) %>%
+  ungroup() %>%
+  filter(date != "2021-01-01") %>%
+  pull(rv_template_0.5_change) %>%
+  summary()
+```
+
+*rv wrt fit_gauss_lambdac*
+```{r}
+final.df %>%
+  group_by(line_order) %>%
+  mutate(lambda_change = changeFun(fit_gauss_lambdac),
+         rv_manual = 299792458*lambda_change/fit_gauss_lambdac[1]) %>%
+  ungroup() %>%
+  select(date, line_order, fit_gauss_lambdac, lambda_change, rv_manual) %>%
+  filter(date != "2021-01-01") %>%
+  pull(rv_manual) %>%
+  summary()
+```
+
+
+# Visual of central lambdas over time
+
+```{r}
+final.df %>%
+  filter(line_order == final_lams_orders[30] ) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = fit_gauss_lambdac), color = "black")
+```
+
+```{r}
+final.df %>%
+  group_by(line_order) %>%
+  mutate(lambda_change = changeFun(fit_gauss_lambdac),
+         rv_template_0.5_change = changeFun(rv_template_0.5),
+         rv_manual = 299792458*lambda_change/fit_gauss_lambdac[1]) %>%
+  ungroup() %>%
+  filter(date != "2021-01-01") %>%
+  ggplot() +
+  geom_point( mapping = aes(x = rv_manual, y = rv_template_0.5_change) )
+```
+
+
+# Weights
+
+```{r}
+final.df %>%
+  select( line_order, date, starts_with("sigma"),  starts_with("fit_gauss_sigma_")) %>%
+  filter(date == "2021-01-01")
+```
+
+```{r}
+final.df %>%
+  filter(lambdac_vald < 9000) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = sigma_rv_template_0.5, y = rv_template_0.5, color = lambdac_vald))
+```
+
+```{r}
+final.df %>%
+  filter(lambdac_vald < 9000) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = fit_gauss_sigma_depth, y = rv_template_0.5, color = lambdac_vald))
+```
+
+```{r}
+final.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = fit_gauss_sigma_depth, y = rv_template_0.5, color = lambdac_vald))
+```
+
+```{r}
+final.df %>%
+  filter(lambdac_vald < 9000) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = sigma_rv_template_0.5, y = rv_template_0.5, color = lambdac_vald))
+```
+
+
+# Autocorrelation
+
+
+```{r}
+auto.df = final.df %>%
+  filter(date_groups == 1) %>%
+  dplyr::select(line_order,date,rv_template_0.5) %>%
+  filter(line_order == "4536.04649_39" )
+
+auto.df
+
+auto.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = rv_template_0.5))
+```
+
+
+```{r}
+acf(auto.df$rv_template_0.5)
+```
+
+```{r}
+rm(auto.df)
+```
+
+## panel autocorrelation
+
+```{r}
+auto.df = final.df %>%
+  dplyr::select(line_order,date,rv_template_0.5)
+auto.df
+```
+
+```{r}
+psacf(auto.df$rv_template_0.5, auto.df$line_order, auto.df$date) 
+```
+
+
+# weighted PCA
+
+different weights
+```{r}
+summary( final.df %>% select(fit_gauss_sigma_depth, sigma_hg_coeff_1, mean_snr_pixel) )
+```
+
+```{r}
+final.df %>%
+  select(fit_gauss_sigma_depth, sigma_hg_coeff_1, mean_snr_pixel) %>%
+  ggpairs()
+```
+
+```{r}
+final.df %>%
+  mutate(weight_depth = 1/fit_gauss_sigma_depth^2,
+         weight_hg1 = 1/sigma_hg_coeff_1^2,
+         weight_snr = mean_snr_pixel^2,
+         wavelength_round = factor(round(lambdac_vald, -3)) ) %>%
+  select(weight_depth, weight_hg1, weight_snr, wavelength_round) %>%
+  ggpairs(columns = 1:3,mapping = aes(color = wavelength_round), size = .1, alpha = .3)
+```
+
+```{r}
+odd_gh = final.df[ str_c( "hg_coeff_", as.character( seq(1,10,2) ) )  ]
+odd_gh
+```
+
+```{r}
+weight_depth = 1/final.df$fit_gauss_sigma_depth^2
+summary(weight_depth)
+```
+
+```{r}
+weight_hg1 = 1/final.df$sigma_hg_coeff_1^2
+summary(weight_hg1)
+```
+
+```{r}
+weight_snr = final.df$mean_snr_pixel^2
+summary(weight_snr)
+```
+
+```{r}
+weight.pca = PCA(odd_gh, row.w = weight_snr, graph = F)
+weight.pca$var$coord
+```
+
+```{r}
+weight.pca = PCA(even_gh, row.w = weight_snr, graph = F)
+weight.pca$var$coord
+```
+
+
+
+
+
+no weight
+                Dim.1        Dim.2        Dim.3       Dim.4        Dim.5
+hg_coeff_1  0.8177942  0.527744087  0.228258251  0.02442638 0.0006400212
+hg_coeff_3 -0.9378263 -0.280474918  0.176934796  0.10206034 0.0096698075
+hg_coeff_5  0.9859688 -0.003760346 -0.148460099  0.07240152 0.0238542397
+hg_coeff_7 -0.9526834  0.292751010  0.006371553 -0.07771060 0.0247314004
+hg_coeff_9  0.8606741 -0.478713327  0.153034615 -0.08095994 0.0099768920
+
+weight (depth)
+                Dim.1       Dim.2      Dim.3       Dim.4       Dim.5
+hg_coeff_1  0.8186862  0.53724950  0.2002754  0.03170736 0.000597233
+hg_coeff_3 -0.9368174 -0.30294435  0.1433361  0.09989105 0.008622775
+hg_coeff_5  0.9877677 -0.01154764 -0.1401368  0.06390825 0.021424713
+hg_coeff_7 -0.9480415  0.30889940  0.0157761 -0.07104389 0.022413160
+hg_coeff_9  0.8567982 -0.48948101  0.1443702 -0.07336356 0.008957751
+
+weight (hg1)
+                Dim.1       Dim.2       Dim.3       Dim.4        Dim.5
+hg_coeff_1  0.8208932  0.52649824  0.22058316  0.01664255 0.0002068336
+hg_coeff_3 -0.9403097 -0.25603485  0.20270001  0.09546717 0.0079083703
+hg_coeff_5  0.9873496 -0.02145002 -0.13121911  0.08356967 0.0218706512
+hg_coeff_7 -0.9575921  0.27759504 -0.00916084 -0.07280232 0.0239631871
+hg_coeff_9  0.8829668 -0.43710522  0.14758467 -0.08620987 0.0097619860
+
+weight (snr)
+                Dim.1       Dim.2        Dim.3       Dim.4        Dim.5
+hg_coeff_1  0.8402967  0.49521112  0.219848817  0.01827202 0.0002223762
+hg_coeff_3 -0.9491068 -0.21903040  0.203440065  0.09882880 0.0081894949
+hg_coeff_5  0.9860542 -0.01864119 -0.142800804  0.08020893 0.0228935763
+hg_coeff_7 -0.9650488  0.25029034 -0.003989304 -0.07345215 0.0249891372
+hg_coeff_9  0.8954750 -0.40658187  0.162268702 -0.07987950 0.0101926608
+
+
+
+# PCA
+
+## odd hg
+
+```{r}
+odd_gh = final.df[ str_c( "hg_coeff_", as.character( seq(1,10,2) ) )  ]
+odd_gh
+```
+
+```{r}
+pairs(odd_gh)
+```
+
+```{r}
+pcaOdd = prcomp(odd_gh, center = T, scale = T, retx = T)
+```
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = pcaOdd$sdev^2 / sum(pcaOdd$sdev^2)
+var_explained
+```
+
+```{r}
+# first 3 pcs
+100*sum(var_explained[1:3])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained")
+```
+
+```{r}
+rm(odd_gh,var_explained)
+```
+
+## even hg
+
+```{r}
+even_gh = final.df[ str_c( "hg_coeff_", as.character( seq(0,10,2) ) )  ]
+even_gh
+```
+
+```{r}
+pairs(even_gh)
+```
+
+```{r}
+pcaEven = prcomp(even_gh, center = T, scale = T, retx = T)
+```
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = pcaEven$sdev^2 / sum(pcaEven$sdev^2)
+var_explained
+```
+
+```{r}
+# first 3 pcs
+100*sum(var_explained[1:3])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained")
+```
+
+```{r}
+rm(even_gh,var_explained)
+```
+
+## all hg
+```{r}
+all_gh = final.df[ str_c( "hg_coeff_", as.character( seq(0,10,1) ) )  ]
+all_gh
+```
+
+
+```{r}
+apply( all_gh, 2, var )
+```
+
+```{r}
+summary(all_gh)
+```
+
+```{r}
+all.pca = PCA(all_gh, graph = F, scale.unit = F)
+all.pca$var$coord
+```
+
+```{r}
+all.pca = PCA(all_gh, graph = F, scale.unit = T)
+all.pca$var$coord
+```
+
+```{r}
+plot.PCA(all.pca, choix = "var")
+```
+
+```{r}
+plot.PCA(all.pca, choix = "var")
+```
+
+```{r}
+plot.PCA(weight.pca, choix = "var")
+```
+
+```{r}
+plot.PCA(weight.pca, choix = "var")
+```
+
+
+
+```{r}
+#all_gh %>%
+#  ggplot(mapping = aes(x = hg_coeff_1, y = hg_coeff_2)) +
+#  geom_point()
+```
+
+```{r}
+pairs(all_gh)
+```
+
+```{r}
+pcaAll = prcomp(all_gh, center = T, scale = T, retx = T)
+```
+
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = pcaAll$sdev^2 / sum(pcaAll$sdev^2)
+var_explained
+```
+
+```{r}
+# first 5 pcs
+100*sum(var_explained[1:5])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained")
+```
+
+```{r}
+rm(all_gh,var_explained)
+```
+
+# visual of line shifts
+
+*get load.solarfile from raw_spectrum loading*
+
+```{r}
+# pick an abitrary line
+
+i = 100
+
+singleline.df = final.df %>%
+  filter(line_order == final_lams_orders[i])
+
+head(singleline.df)
+```
+
+```{r}
+# sample three random days (before fire)
+days = sample(singleline.df$date[singleline.df$date_groups == 1], 3)
+days
+```
+
+```{r}
+rawspectra.df = data.frame()
+
+for (j in 1:length(days) ) {
+  day = days[j]
+  
+  rawspectra.df = rbind(rawspectra.df,
+        load.solarfile( str_c("solar_spectrum_",day,".h5") ) %>%
+          # filter between low and high pixel values
+          filter(pixel >= unique( singleline.df$pixel_extracted_lo ) & pixel <= unique(singleline.df$pixel_extracted_hi )) %>%
+          # filter order
+          filter(order == str_split_1(final_lams_orders[i], "_")[2])
+        )
+  
+  
+}
+```
+
+```{r}
+rawspectra.df %>%
+  ggplot() +
+  xlim(4440.8,4440.94) +
+  geom_point(mapping = aes(x = lambda, y = flux_norm, color = factor(date) )) +
+  geom_smooth(mapping = aes(x = lambda, y = flux_norm, color = factor(date) ), se =F) +
+  geom_vline(xintercept = ( singleline.df %>% filter(date == days[1]) )$fit_gauss_lambdac, color = "blue") +
+  geom_vline(xintercept = ( singleline.df %>% filter(date == days[2]) )$fit_gauss_lambdac, color = "red") +
+  geom_vline(xintercept = ( singleline.df %>% filter(date == days[3]) )$fit_gauss_lambdac, color = "green")
+```
+
+# pairs plots
+
+```{r}
+# list of covariates
+covar.list = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq", "rv_template_0.5", "hg_coeff_0", "hg_coeff_1", "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", "hg_coeff_8", "hg_coeff_9", "hg_coeff_10", "thg_coeff_0", "thg_coeff_1", "thg_coeff_2", "thg_coeff_3", "thg_coeff_4", "thg_coeff_5", "thg_coeff_6", "thg_coeff_7", "thg_coeff_8", "thg_coeff_9", "thg_coeff_10")
+covar.list = c(covar.list, str_c(covar.list,"_change"), str_c(covar.list,"_center"))
+covar.list
+```
+
+```{r}
+var1 = "fit_gauss_depth"
+var2 = "fit_gauss_sigmasq"
+
+
+final.df %>%
+  drop_na() %>%
+  filter(lambdac_vald < 7000) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = !!sym(var1), y = !!sym(var2), color = lambdac_vald))
+```
+
+```{r}
+rm(var1, var2, covar.list)
+```
+
+# rv over lines
+
+```{r}
+currentLines = c(1:100)
+
+final.df %>%
+  filter(line_order %in% final_lams_orders[currentLines]) %>%
+  ggplot() +
+  geom_boxplot(mapping = aes(x = line_order, y = rv_template_0.5), outlier.shape = NA) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  ylim(-20,20) +
+  ggtitle(str_c(final_lams_orders[currentLines][1], " to ", final_lams_orders[currentLines][length(currentLines)]) )
+  
+```
+
+```{r}
+currentLines = c(101:200)
+
+final.df %>%
+  filter(line_order %in% final_lams_orders[currentLines]) %>%
+  ggplot() +
+  geom_boxplot(mapping = aes(x = line_order, y = rv_template_0.5)) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  ylim(-200,200) +
+  ggtitle(str_c(final_lams_orders[currentLines][1], " to ", final_lams_orders[currentLines][length(currentLines)]) )
+  
+```
+
+```{r}
+currentLines = c(501:600)
+
+final.df %>%
+  filter(line_order %in% final_lams_orders[currentLines]) %>%
+  ggplot() +
+  geom_boxplot(mapping = aes(x = line_order, y = rv_template_0.5)) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  ylim(-200,200) +
+  ggtitle(str_c(final_lams_orders[currentLines][1], " to ", final_lams_orders[currentLines][length(currentLines)]) )
+  
+```
+
+
+```{r}
+final.df %>%
+  filter(date == final_days[50]) %>%
+  select(rv_template_0.5, lambdac_vald) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambdac_vald, y = rv_template_0.5))
+```
+
+
+
+etc.
+
+# rv over time
+
+## sample of a few lines
+
+```{r}
+final.df %>%
+  filter(line_order %in% sample( final_lams_orders, 4)) %>%
+  ggplot(mapping = aes(x = date, y = rv_template_0.5, color = line_order) ) +
+  geom_point(alpha = .2) +
+  geom_line(alpha = .5)
+  #theme(
+  #  axis.text.x = element_blank(),
+   # axis.ticks.x = element_blank()
+  #)
+```
+
+
+## no perturbation
+
+```{r}
+final.df %>%
+  mutate(date = as.Date(date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = rv_template_0.5), alpha = .2) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+final.df %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarize(mean_RV = mean(rv_template_0.5) ) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_RV))
+```
+
+```{r}
+final.df %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarize(med_RV = median(rv_template_0.5) ) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = med_RV))
+```
+
+
+mean change in rv over time 95% CI  bars
+
+```{r}
+final.df %>%
+  group_by(date) %>%
+  summarize( mean_RV = mean(rv_template_0.5),
+             sd_error = sd(rv_template_0.5)/sqrt( n() ) ) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_RV), size = 1) +
+  geom_errorbar(aes(x = date, ymin = mean_RV - 1.96*sd_error, ymax = mean_RV + 1.96*sd_error), color = "black", linewidth = .25)
+```
+
+median change in rv over time 95% CI  bars
+
+```{r}
+final.df %>%
+  group_by(date) %>%
+  summarize( med_RV = median(rv_template_0.5),
+             sd_error = sd(rv_template_0.5)/sqrt( n() ) ) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = med_RV), size = 1) +
+  geom_errorbar(aes(x = date, ymin = med_RV - 1.96*sd_error, ymax = med_RV + 1.96*sd_error), color = "black", linewidth = .25)
+```
+
+## w/ perturbation
+
+```{r}
+# amplitude
+amp = 1
+# frequency
+freq = 2*pi/366
+# offset
+offset = 0
+```
+
+
+```{r}
+pert.df = final.df %>%
+  #filter(date_groups == 1) %>%
+  dplyr::select(date, line_order, rv_template_0.5) %>%
+  group_by(line_order) %>%
+  mutate(date_num = changeFun(as.numeric(date)) ) %>%
+  ungroup() %>%
+  group_by(date) %>%
+  mutate(pert_val = amp*sin(freq*date_num + offset) ) %>%
+  ungroup() %>%
+  mutate(pert_rv = rv_template_0.5 + pert_val)
+```
+
+```{r}
+pert.df %>%
+  dplyr::select(date,date_num,pert_val) %>%
+  unique() %>%
+  ggplot(mapping = aes(x = date_num, y = pert_val) ) +
+  geom_point( color = "red") +
+  geom_function(fun = function(x) { amp*sin(freq*x + offset) } )
+```
+
+adding perturbation to rv_template_0.5 and taking the mean
+
+```{r}
+pert.df %>%
+  group_by(date) %>%
+  summarize(mean_RV = mean(pert_rv),
+            pert = mean(pert_val)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_RV)) +
+  geom_point(mapping = aes(x = date, y = pert), color = "red")
+```
+
+adding perturbation to rv_template_0.5 and taking the median
+
+```{r}
+pert.df %>%
+  group_by(date) %>%
+  summarize(med_RV = median(pert_rv),
+            pert = median(pert_val)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = med_RV)) +
+  geom_point(mapping = aes(x = date, y = pert), color = "red")
+```
+
+```{r}
+pert.df %>%
+  group_by(date) %>%
+  summarize(mean_RV = mean(pert_rv),
+            sd_error = sd(pert_rv)/sqrt( n() ),
+            pert = mean(pert_val),
+            date_num = mean(date_num)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_RV), size = 1) +
+  geom_point(mapping = aes(x = date, y = pert), color = "red") +
+  geom_errorbar(aes(x = date, ymin = mean_RV - 1.96*sd_error, ymax = mean_RV + 1.96*sd_error), color = "black", linewidth = .25)
+```
+
+```{r}
+pert.df %>%
+  group_by(date) %>%
+  summarize(med_RV = median(pert_rv),
+            sd_error = sd(pert_rv)/sqrt( n() ),
+            pert = mean(pert_val) ) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = med_RV), size = 1) +
+  geom_point(mapping = aes(x = date, y = pert), color = "red") +
+  geom_errorbar(aes(x = date, ymin = med_RV - 1.96*sd_error, ymax = med_RV + 1.96*sd_error), color = "black", linewidth = .25)
+```
+
+
+
+```{r}
+rm(amp, freq, offset, pert.df)
+```
+
+# outlier rv lines
+
+```{r}
+summary(final.df$rv_template_0.5)
+rv.quantiles = quantile(final.df$rv_template_0.5, probs = c(.001,.01,.025,.05,.95,.975,.99,.999))
+rv.quantiles
+```
+
+```{r}
+final.df %>%
+  filter(rv_template_0.5 < rv.quantiles[2] | rv_template_0.5 > rv.quantiles[7])
+```
+
+```{r}
+final.df %>%
+  filter(rv_template_0.5 < rv.quantiles[2] | rv_template_0.5 > rv.quantiles[7]) %>%
+  count(date) %>%
+  ggplot() +
+  geom_line(mapping = aes(x = date, y = n))
+```
+
+```{r}
+final.df %>%
+  filter(rv_template_0.5 < rv.quantiles[2] | rv_template_0.5 > rv.quantiles[7]) %>%
+  count(line_order)
+```
+
+```{r}
+final.df %>%
+  filter(rv_template_0.5 < rv.quantiles[2] | rv_template_0.5 > rv.quantiles[7]) %>%
+  count(line_order) %>%
+  ggplot() +
+  geom_bar(mapping = aes(x = factor(line_order), y = n), stat="identity") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+```
+
+```{r}
+outlier.lines = (
+  final.df %>%
+    filter(rv_template_0.5 < rv.quantiles[2] | rv_template_0.5 > rv.quantiles[7]) %>%
+    count(lambdac_vald) %>%
+    filter(n > 50)
+  )$lambdac_vald
+outlier.lines
+```
+
+```{r}
+summary((final.df %>% filter(!(lambdac_vald %in% outlier.lines)))$rv_template_0.5)
+```
+
+
+
+
+```{r}
+outlier.lines2 = (final.df %>% filter(fit_gauss_b == .7 | fit_gauss_b == -.7) %>% count(line_order))$line_order
+outlier.lines2
+```
+
+```{r}
+summary((final.df %>% filter(line_order %in% outlier.lines2))$rv_template_0.5)
+```
+
+```{r}
+summary((final.df %>% filter(!(line_order %in% outlier.lines2)))$rv_template_0.5)
+```
+
+
+
+# hg1 and rv plots
+
+```{r}
+final.df %>%
+  #filter(wavelength<8600) %>%
+  ggplot(mapping = aes(x=hg_coeff_1, y=rv_template_0.5, color = lambdac_vald)) +
+  geom_point(alpha=.2)
+```
+
+```{r}
+final.df %>%
+  filter(lambdac_vald<8600) %>%
+  ggplot(mapping = aes(x=hg_coeff_1, y=rv_template_0.5, color = lambdac_vald)) +
+  geom_point(alpha=.2)
+```
+
+```{r}
+i = 301
+
+final.df %>%
+  filter(line_order == final_lams_orders[i] ) %>%
+  ggplot(mapping = aes(x=hg_coeff_1, y=rv_template_0.5, color = lambdac_vald)) +
+  geom_point(alpha=.2)
+```
+
+fitting individual lm's on specific lines hg1 v rv
+```{r}
+i = 301
+
+hg1.lm = lm(rv_template_0.5 ~ hg_coeff_1,
+            final.df %>%
+              filter(line_order == final_lams_orders[i]) 
+            )
+final.df %>%
+  filter(line_order == final_lams_orders[i])  %>%
+  ggplot(mapping = aes(x=hg_coeff_1, y=rv_template_0.5)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+
+```{r}
+i = 150
+
+hg1.lm = lm(rv_template_0.5 ~ hg_coeff_1,
+            final.df %>%
+              filter(line_order == final_lams_orders[i]) 
+            )
+final.df %>%
+  filter(line_order == final_lams_orders[i])  %>%
+  ggplot(mapping = aes(x=hg_coeff_1, y=rv_template_0.5)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+
+```{r}
+i = 600
+
+hg1.lm = lm(rv_template_0.5 ~ hg_coeff_1,
+            final.df %>%
+              filter(line_order == final_lams_orders[i]) 
+            )
+final.df %>%
+  filter(line_order == final_lams_orders[i])  %>%
+  ggplot(mapping = aes(x=hg_coeff_1, y=rv_template_0.5)) +
+  geom_point() +
+  ggtitle( final_lams_orders[i], subtitle = paste0("slope == ",hg1.lm$coefficients[2], ", adj.r.squared == ", summary(hg1.lm)$adj.r.squared) ) +
+  geom_smooth(method = "lm", se=F)
+```
+
+# scatter plots depth for two lines + correlation
+
+```{r}
+lam1 = "5298.152_58"
+lam2 = final_lams_orders[2]
+
+df = final.df %>%
+  filter( line_order == lam1 | line_order == lam2 ) %>%
+  pivot_wider(id_cols = "dates", names_from = "line_order", values_from = "depth1", names_prefix = "depth_")
+
+df %>% ggplot(mapping = aes(x = !!sym( str_c("depth_",lam1) ), y = !!sym( str_c("depth_",lam2) ) ) ) +
+  geom_point()
+
+print( cor( df %>% dplyr::select(!(dates)), method = "pearson" )[1,2] )
+print( cor( df %>% dplyr::select(!(dates)), method = "spearman")[1,2] )
+```
+
+```{r}
+final.df %>%
+  mutate(dates = as.Date(dates)) %>%
+  filter( line_order == lam1 | line_order == final_lams_orders[2] | line_order == "5248.496_57" | line_order == final_lams_orders[120]) %>%
+  group_by(line_order) %>%
+  mutate(mean_depth = mean(depth1), sd_depth = sd(depth1)) %>%
+  ungroup() %>%
+  mutate(std_depth = (depth1 - mean_depth)/sd_depth  ) %>%
+  ggplot(mapping = aes(x = dates, y = std_depth, color = line_order)) +
+  geom_point()
+```
+
+```{r}
+lam1 = "9212.524_107"
+lam2 = "9572.503_110"
+
+df = final.df %>%
+  filter( line_order == lam1 | line_order == lam2 ) %>%
+  pivot_wider(id_cols = "dates", names_from = "line_order", values_from = "depth1", names_prefix = "depth_")
+
+df %>% ggplot(mapping = aes(x = !!sym( str_c("depth_",lam1) ), y = !!sym( str_c("depth_",lam2) ) ) ) +
+  geom_point()
+
+print( cor( df %>% dplyr::select(!(dates)), method = "pearson" )[1,2] )
+print( cor( df %>% dplyr::select(!(dates)), method = "spearman")[1,2] )
+```
+
+```{r}
+final.df %>%
+  mutate(dates = as.Date(dates)) %>%
+  filter( line_order == lam1 | line_order == lam2 |line_order == "9292.992_108" ) %>%
+  group_by(line_order) %>%
+  mutate(mean_depth = mean(depth1), sd_depth = sd(depth1)) %>%
+  ungroup() %>%
+  mutate(std_depth = (depth1 - mean_depth)/sd_depth  ) %>%
+  ggplot(mapping = aes(x = dates, y = std_depth, color = line_order)) +
+  geom_point()
+```
+
+```{r}
+rm(lam1,lam2,df)
+```
+
+

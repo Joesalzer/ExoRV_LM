@@ -1,0 +1,962 @@
+---
+title: "NEID Solar Data -- Linear Modeling"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("readSpectra.R")
+#library(lme4)
+#library(car)
+#library(emmeans)
+library(Matrix)
+#library(boot)
+# autocorrelation
+#library(collapse)
+#library(glmm)
+#library(MASS)
+#library(gridExtra)
+#library(glmnet)
+#library(plm)
+#library(sandwich)
+#library(lmtest)
+
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/"
+```
+
+# Loading data
+
+```{r}
+# read data
+final_df = read_csv("/Users/josephsalzer/research/exostat/completeLines.csv")
+```
+
+```{r}
+colnames(final_df)
+```
+
+
+*REMOVE BIASED LINES*
+```{r}
+lowPClines = readRDS(file = "nonbiasedLines.rds")
+final_df = final_df %>%
+  filter(line_order %in% lowPClines)
+```
+
+```{r}
+# convert line order and date into factors
+final_df = final_df %>%
+  mutate(date = as.Date(date))
+```
+
+```{r}
+# list of lambdas in final_df
+final_lines = ( final_df %>% group_by(lambdac_vald) %>% summarize(n. = n()) )$lambdac_vald
+length(final_lines)
+```
+
+```{r}
+# list of lamb-orders in model.df
+final_line_order = ( final_df %>% group_by(line_order) %>% summarize(n. = n()) )$line_order
+length(final_line_order)
+```
+
+```{r}
+# list of lambda-orders in model.df
+final_days = ( final_df %>% group_by(date) %>% summarize(n. = n()) )$date
+length(final_days)
+```
+
+# TWFE model
+
+## sparse representation lm estimate
+
+```{r}
+# get rv dataframe
+current_df = final_df %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order)) %>%
+  select(line_order, date, rv_template_0.5)
+current_df
+```
+
+```{r}
+# (sparse) design matrix for model
+X = sparse.model.matrix(~ line_order + date, current_df )
+# responses
+Y = current_df$rv_template_0.5
+```
+
+```{r}
+#X[c(1:5,(1+345):(5+345)), c(1:5,(1+910):(5+910))]
+```
+
+
+```{r}
+# fit the linear model using all data
+fit_lm = sparseLM(X,Y)
+```
+
+```{r}
+# dataframe of coefficients of current model
+coef_df = tibble( coef = rownames( fit_lm$beta_hat ),
+                  estimate = fit_lm$beta_hat[,1],
+                  se = sqrt( diag(fit_lm$var_beta_hat) ) )
+```
+
+```{r}
+coef_df %>%
+  filter( startsWith(coef,"date") ) %>%
+  mutate(date = as.Date( str_sub(coef, 5)  ) ) %>%
+  ggplot( mapping = aes(x = date) ) +
+  geom_point(mapping = aes(y = estimate), size = .7) +
+  geom_errorbar(mapping = aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se), color = "black",linewidth = .1) +
+  geom_hline(yintercept = 0, color = "red") +
+  ylab("change from baseline")
+```
+
+*bootstrap coefficients replicates*
+
+```{r}
+bootcoef_df = casebootCoef(X,Y,300)
+# save df
+saveRDS(bootcoef_df,"boot_coef300_unbiased")
+rm(bootcoef_df)
+```
+
+```{r}
+# read df
+bootcoef_df = readRDS("boot_coef300_unbiased")
+```
+
+```{r}
+# sd ("SE") of each coefficient in the bootstrap coefficient matrix
+boot_se = apply(bootcoef_df, 2, sd)
+```
+
+```{r}
+# make sure the same size as coef_df
+length(boot_se)
+```
+
+```{r}
+# add the bootstrap se to the coef
+coef_df$boot_se = boot_se
+```
+
+se of normal approx coef v boot se
+for date coefs
+```{r}
+coef_df %>%
+  filter( startsWith(coef,"date") ) %>%
+  mutate(date = as.Date( str_sub(coef, 5)  ) ) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = boot_se)) +
+  geom_hline(yintercept = 1.61, color = "red")
+```
+
+```{r}
+coef_df %>%
+  filter( startsWith(coef,"date") ) %>%
+  mutate(date = as.Date( str_sub(coef, 5)  ) ) %>%
+  summary()
+```
+
+
+*bootstrap emmean prediction for every day*
+
+first we will build the reference grid where we have every line_order and date combination, and replace the continous variables with their mean
+
+```{r}
+refgrid = final_df %>%
+  arrange(date) %>%
+  #filter(line_order %in% final_line_order[1:3],date %in% final_days[1:3]) %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order)) %>%
+  select(date, line_order)
+refgrid
+```
+```{r}
+X_star = sparse.model.matrix(~ line_order + date, refgrid )
+```
+
+```{r}
+dim(X_star)
+rm(refgrid)
+```
+
+```{r}
+
+# run the empirical marginal means for each day
+
+# unbiased lines only
+day_empmean = empMeanDay(bootcoef_df, X_star, 434, 345)
+rm(bootcoef_df,  X_star)
+
+# all lines
+# day_empmean = empMeanDay(bootcoef_df, X_star, 910, 345)
+# rm(bootcoef_df,  X_star)
+```
+
+
+```{r}
+dim(day_empmean)
+```
+
+```{r}
+# mean of each day from bootstrap
+day_mean = apply(day_empmean, 1, mean)
+# lower and upper 95% CI for these values
+day_lower95 = apply(day_empmean, 1, function(x) { quantile(x, probs = .025) })
+day_upper95 = apply(day_empmean, 1, function(x) { quantile(x, probs = .975) })
+```
+
+```{r}
+ggplot( mapping = aes(x = final_days) ) +
+  geom_point(mapping = aes(y = day_mean), size = .5) +
+  geom_errorbar(mapping = aes(ymin = day_lower95, ymax = day_upper95), color = "black", linewidth = .2) +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+```{r}
+# median of each day from bootstrap
+day_mean = apply(day_empmean, 1, median)
+# lower and upper 95% CI for these values
+day_lower99 = apply(day_empmean, 1, function(x) { quantile(x, probs = .0005) })
+day_upper99 = apply(day_empmean, 1, function(x) { quantile(x, probs = .9995) })
+```
+
+```{r}
+day_lower95[1]
+day_lower99[1]
+```
+
+```{r}
+ggplot( mapping = aes(x = final_days) ) +
+  geom_point(mapping = aes(y = day_mean), size = .3) +
+  geom_errorbar(mapping = aes(ymin = day_lower99, ymax = day_upper99), color = "black", linewidth = .2) +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+## planet signal
+
+```{r}
+# get rv dataframe
+current_df = injectPlanet(final_df, amp = 5) %>%
+  select(date, line_order, pert_val, rv_template_0.5, pert_rv) %>%
+  mutate(date = factor(date))
+current_df
+```
+
+```{r}
+# (sparse) design matrix for model
+X = sparse.model.matrix(~ line_order + date, current_df )
+# responses
+Y = current_df$pert_rv
+```
+
+```{r}
+# fit the linear model using all data
+fit_lm = sparseLM(X,Y)
+```
+
+```{r}
+# dataframe of coefficients of current model
+coef_df = tibble( coef = rownames( fit_lm$beta_hat ),
+                  estimate = fit_lm$beta_hat[,1],
+                  se = sqrt( diag(fit_lm$var_beta_hat) ) )
+```
+
+```{r}
+current_df
+```
+
+```{r}
+date_df = coef_df %>%
+  filter( startsWith(coef,"date") ) %>%
+  mutate(date = as.Date( str_sub(coef, 5)  ) )
+
+ggplot() +
+  geom_point(mapping = aes(x = date_df$date, y = date_df$estimate), size = .5) +
+  geom_errorbar(mapping = aes(x = date_df$date,
+                              ymin = date_df$estimate - 1.96*date_df$se, ymax = date_df$estimate + 1.96*date_df$se),
+                color = "black", linewidth = .1) +
+  geom_hline(yintercept = 0, color = "black") +
+  geom_line(mapping = aes(x = final_days[1] + seq(0, 918),
+                          y = 5*sin( 2*pi/366*( seq(0, 918) ) )),
+            color = "red", linewidth = 1.2, alpha = 1)
+```
+
+
+# TWFE + shape
+
+## sparse representation lm estimate
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq","thg_coeff_0","thg_coeff_3","thg_coeff_2","thg_coeff_4", "thg_coeff_5")
+
+# get rv dataframe
+current_df = standardize(final_df, covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order)) %>%
+  select(rv_template_0.5, line_order, date, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered, thg_coeff_0_centered, thg_coeff_2_centered, thg_coeff_3_centered, thg_coeff_4_centered, thg_coeff_5_centered)
+
+# (sparse) design matrix for model
+X = sparse.model.matrix(~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + thg_coeff_0_centered + thg_coeff_2_centered + thg_coeff_3_centered + thg_coeff_4_centered + thg_coeff_5_centered, current_df )
+# responses
+Y = current_df$rv_template_0.5
+
+rm(current_df)
+```
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq")
+
+# get rv dataframe
+current_df = standardize(final_df, covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order)) %>%
+  select(rv_template_0.5, line_order, date, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered)
+
+# (sparse) design matrix for model
+X = sparse.model.matrix(~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered, current_df )
+# responses
+Y = current_df$rv_template_0.5
+
+rm(current_df)
+```
+
+
+```{r}
+# fit the linear model using all data
+fit_lm = sparseLM(X,Y)
+```
+
+```{r}
+# dataframe of coefficients of current model
+coef_df = tibble( coef = rownames( fit_lm$beta_hat ),
+                  estimate = fit_lm$beta_hat[,1],
+                  se = sqrt( diag(fit_lm$var_beta_hat) ) )
+```
+
+```{r}
+coef_df %>%
+  filter( startsWith(coef,"date") ) %>%
+  mutate(date = as.Date( str_sub(coef, 5)  ) ) %>%
+  ggplot( mapping = aes(x = date) ) +
+  geom_point(mapping = aes(y = estimate), size = .7) +
+  geom_errorbar(mapping = aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se), color = "black",linewidth = .2) +
+  geom_hline(yintercept = 0, color = "red") +
+  ylab("change from baseline")
+```
+
+*bootstrap coefficients replicates*
+
+```{r}
+bootcoef_df = casebootCoef(X,Y,300)
+# save df
+saveRDS(bootcoef_df,"boot_coef300")
+rm(bootcoef_df)
+```
+
+```{r}
+# read df
+bootcoef_df = readRDS("boot_coef300")
+```
+
+```{r}
+# sd ("SE") of each coefficient in the bootstrap coefficient matrix
+boot_se = apply(bootcoef_df, 2, sd)
+```
+
+```{r}
+# make sure the same size as coef_df
+length(boot_se)
+```
+
+```{r}
+# add the bootstrap se to the coef
+coef_df$boot_se = boot_se
+```
+
+se of normal approx coef v boot se
+for date coefs
+```{r}
+coef_df %>%
+  filter( startsWith(coef,"date") ) %>%
+  mutate(date = as.Date( str_sub(coef, 5)  ) ) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = boot_se)) +
+  geom_hline(yintercept = 1.497239, color = "red")
+```
+
+*bootstrap emmean prediction for every day*
+
+first we will build the reference grid where we have every line_order and date combination, and replace the continous variables with their mean
+
+```{r}
+refgrid = final_df %>%
+  arrange(date) %>%
+  #filter(line_order %in% final_line_order[1:3],date %in% final_days[1:3]) %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order),
+         fit_gauss_a_centered = 0,
+         fit_gauss_b_centered = 0, 
+         fit_gauss_depth_centered = 0,
+         fit_gauss_sigmasq_centered = 0,
+         thg_coeff_0_centered = 0,
+         thg_coeff_2_centered = 0,
+         thg_coeff_4_centered = 0) %>%
+  select(date, line_order, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered, thg_coeff_0_centered, thg_coeff_2_centered, thg_coeff_4_centered)
+refgrid
+```
+
+```{r}
+X_star = sparse.model.matrix(~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + thg_coeff_0_centered + thg_coeff_2_centered + thg_coeff_4_centered, refgrid )
+```
+
+```{r}
+dim(X_star)
+rm(refgrid)
+```
+
+```{r}
+# run the empirical marginal means for each day
+day_empmean = empMeanDay(bootcoef_df, X_star, 910, 345)
+rm(bootcoef_df,  X_star)
+```
+
+```{r}
+dim(day_empmean)
+```
+
+```{r}
+# mean of each day from bootstrap
+day_mean = apply(day_empmean, 1, mean)
+# lower and upper 95% CI for these values
+day_lower95 = apply(day_empmean, 1, function(x) { quantile(x, probs = .025) })
+day_upper95 = apply(day_empmean, 1, function(x) { quantile(x, probs = .975) })
+```
+
+```{r}
+ggplot( mapping = aes(x = final_days) ) +
+  geom_point(mapping = aes(y = day_mean), size = .5) +
+  geom_errorbar(mapping = aes(ymin = day_lower95, ymax = day_upper95), color = "black", linewidth = .2) +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+# MIXED small model
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "thg_coeff_0", "thg_coeff_1", 
+             "thg_coeff_2", "thg_coeff_3", "thg_coeff_4", 
+             "thg_coeff_5", "thg_coeff_6", "thg_coeff_7", 
+             "thg_coeff_8", "thg_coeff_9", "thg_coeff_10")
+```
+
+```{r}
+# standardize data, only before fire
+current_df = standardize(final_df, covars, trainTestSplit = F, responseChange = T) %>%
+  mutate(date = factor(date)) %>%
+  filter(date_groups == 1)
+```
+
+```{r}
+# standardize data, all days
+current_df = standardize(final_df, covars, trainTestSplit = F, responseChange = T) %>%
+  mutate(date = factor(date))
+```
+
+```{r}
+# add pcs to dataframe
+current_df = cbind( current_df, pcaAll$x[,1:6] )
+```
+
+```{r}
+rv.glmm = lmer(rv_template_0.5_change ~ 0 + date + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center + fit_gauss_sigmasq_center + thg_coeff_0_center+ thg_coeff_2_center + thg_coeff_3_center + thg_coeff_4_center + thg_coeff_5_center + thg_coeff_6_center + thg_coeff_7_center + (1|line_order),
+               data = current_df,
+               weights = 1/current_df$sigma_rv_template_0.5^2 )
+summary.rv.glmm = summary(rv.glmm)
+```
+
+```{r}
+rv.glmm = lmer(rv_template_0.5_change ~ 0 + date + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center + fit_gauss_sigmasq_center + PC1 + PC2 + PC3 + PC4 + PC5 + (1|line_order),
+               data = current_df,
+               weights = 1/current_df$sigma_rv_template_0.5^2 )
+summary.rv.glmm = summary(rv.glmm)
+```
+
+```{r}
+vif(currentlm)
+```
+
+
+
+```{r}
+vif(rv.glmm)
+```
+
+```{r}
+vif(rv.glmm)
+```
+
+```{r}
+# dataframe of coefficients of currentlm 
+coef_df = tibble( coef = rownames(summary.rv.glmm$coefficients),
+                  estimate = summary.rv.glmm$coefficients[,1],
+                  se = summary.rv.glmm$coefficients[,2],
+                  tval = summary.rv.glmm$coefficients[,3] )
+```
+
+```{r}
+coef_df %>%
+  filter(startsWith(coef,"date")) %>%
+  mutate(date = as.Date( str_sub(coef,start=5)   ) ) %>%
+  ggplot(mapping = aes(x = date)) +
+  geom_point(mapping = aes(y = estimate), color = "black") +
+  geom_errorbar(mapping = aes(ymin = estimate - 1.96*se, ymax = estimate + 1.96*se), color = "black") +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+```{r}
+current_df %>%
+  ggplot() +
+  geom_point(mapping = aes(y = summary.rv.glmm$residuals, x = fitted(rv.glmm)), alpha = .5)
+```
+
+```{r}
+current_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = rv_template_0.5_change, y = fitted(rv.glmm)), alpha = .5) +
+  geom_abline(slope = 1, intercept = 0)
+```
+
+```{r}
+current_df$cleanRV = current_df$rv_template_0.5_change - fitted(rv.glmm)
+```
+
+
+```{r}
+current_df %>%
+  mutate(date = as.Date(date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = rv_template_0.5_change), alpha = .5) +
+  geom_point(mapping = aes(x = date, y = cleanRV), alpha = .5, color = "red")
+```
+
+
+```{r}
+current_df %>%
+  filter(date != "2021-01-01") %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarise(mean_dirtyRV = mean(rv_template_0.5_change),
+            se_dirtyRV = sd(rv_template_0.5_change)/sqrt( n() ),
+            mean_cleanRV = mean(cleanRV),
+            se_cleanRV = sd(cleanRV)/sqrt( n() ) ) %>%
+  ungroup() %>%
+  mutate( sd_mean_cleanRV = sd(mean_cleanRV),
+          )
+```
+
+```{r}
+current_df %>%
+  filter(date != "2021-01-01") %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarise(mean_dirtyRV = mean(rv_template_0.5_change),
+            se_dirtyRV = sd(rv_template_0.5_change)/sqrt( n() ),
+            mean_cleanRV = mean(cleanRV),
+            se_cleanRV = sd(cleanRV)/sqrt( n() ) ) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = mean_dirtyRV), size = 1) +
+  geom_errorbar(aes(x = date, ymin = mean_dirtyRV - 1.96*se_dirtyRV, ymax = mean_dirtyRV + 1.96*se_dirtyRV), color = "black", linewidth = .25) +
+  geom_point(mapping = aes(x = date, y = mean_cleanRV), size = 1, color = "red") +
+  geom_errorbar(aes(x = date, ymin = mean_cleanRV - 1.96*se_cleanRV, ymax = mean_cleanRV + 1.96*se_cleanRV), color = "red", linewidth = .25)
+```
+
+
+
+```{r}
+# autocorrelation
+psacf(summary.rv.glmm$residuals, current_df$line_order, current_df$date)
+```
+
+# big model
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", "hg_coeff_1", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+```
+
+```{r}
+current_df %>%
+    group_by(line_order) %>%
+    mutate_at(covars,centerFun) %>%
+    ungroup() %>%
+    summarize_at(covars,sd)
+```
+
+```{r}
+# standardize data
+current_df = standardize(final_df, covars, TRAIN_TEST_SPLIT = F) %>%
+  mutate(date = factor(date))
+```
+
+```{r}
+current_df
+```
+
+```{r}
+# remove after fire days
+current_df = current_df %>%
+  filter(date_groups == 1)
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5_change ~ line_order + date + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center + fit_gauss_sigmasq_center + hg_coeff_0_center + hg_coeff_2_center + hg_coeff_3_center + hg_coeff_4_center + hg_coeff_5_center + hg_coeff_6_center + hg_coeff_7_center, current_df )
+
+currentlm.summary = summary(currentlm)
+```
+
+```{r}
+# get emmeans (with line_order as nuisance)
+emmean.summary = summary( emmeans(currentlm, "date", nuisance = "line_order") )
+# get emmeans (without line_order as nuisance)
+#emmean.summary = summary( emmeans(currentlm, "date") )
+
+# dataframe of coefficients of currentlm 
+coef_df = tibble( coef = rownames(summary(currentlm )$coefficients),
+                  estimate = summary(currentlm )$coefficients[,1],
+                  se = summary(currentlm )$coefficients[,2],
+                  pval = summary(currentlm )$coefficients[,4] )
+```
+
+```{r}
+# adj.r.squared
+currentlm.summary$adj.r.squared
+# RSE
+currentlm.summary$sigma
+# standard error of date effect (mean)
+mean(emmean.summary$SE)
+# percent of days that aren't statistically different than 0 (95%)
+mean(
+  (emmean.summary$emmean - qnorm(.975)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(.975)*emmean.summary$SE > 0)
+)
+# percent of days aren't statistically different than 0 (99%)
+mean(
+  (emmean.summary$emmean - qnorm(0.995)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(0.995)*emmean.summary$SE > 0)
+)
+```
+
+with AF days, date+line_order as fixed effect
+[1] 0.7419272
+[1] 20.72138
+[1] 0.6869755
+[1] 0.3942029
+[1] 0.5652174
+
+without AF days, date+line_order as fixed effect
+[1] 0.7317755
+[1] 19.5463
+[1] 0.6480199
+[1] 0.7885463
+[1] 0.9251101
+
+```{r}
+emmean.summary %>%
+  ggplot(mapping = aes(x = as.Date(date))) +
+  geom_point(mapping = aes(y = emmean), color = "black") +
+  geom_errorbar(mapping = aes(ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+
+```{r}
+emmean.summary %>%
+  ggplot(mapping = aes(x = as.Date(date))) +
+  geom_point(mapping = aes(y = emmean), color = "black") +
+  geom_errorbar(mapping = aes(ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
+  geom_hline(yintercept = 0, color = "red")
+```
+
+```{r}
+plot(currentlm,1)
+```
+
+```{r}
+plot(currentlm,2)
+```
+
+panel autocorrelation
+```{r}
+psacf(currentlm.summary$residuals, current_df$line_order, current_df$date)
+```
+
+```{r}
+current_df %>%
+  mutate(residuals = currentlm.summary$residuals,
+         residualsLag1 = lag(currentlm.summary$residuals)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = residuals, residualsLag1))
+```
+
+```{r}
+rm(coef_df, current_df, currentlm, emmean.summary, covars, currentlm.summary)
+```
+
+# PCA Regression
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", "hg_coeff_1", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+
+# covars we want to do PCA on
+covars.pca = c("hg_coeff_0", "hg_coeff_1", "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+
+# load in current data frame
+select.df = final_df %>% select( all_of(c("rv_template_0.5","line_order","date",covars)) )
+```
+
+```{r}
+standardized = standardize(current_df = select.df,
+                                      covars = covars,
+                                      covars.pca = covars.pca,
+                                      trainTestSplit = F)
+```
+
+```{r}
+colnames(standardized)
+```
+
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5_change ~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + PC1 + PC2 + PC3, standardized )
+
+currentlm.summary = summary(currentlm)
+```
+
+
+# VIF
+
+VIF for our models
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", "hg_coeff_1", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10",
+             "thg_coeff_1", "thg_coeff_2", "thg_coeff_3", "thg_coeff_4", 
+             "thg_coeff_5", "thg_coeff_6", "thg_coeff_7", 
+             "thg_coeff_8", "thg_coeff_9", "thg_coeff_10")
+```
+
+```{r}
+# standardize data
+current_df = standardize(final_df, covars, trainTestSplit = F) %>%
+  mutate(date = factor(date))
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5_change ~ fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center + fit_gauss_sigmasq_center, current_df )
+
+vif(currentlm)
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5_change ~ fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center + fit_gauss_sigmasq_center + hg_coeff_0_center, current_df )
+
+vif(currentlm)
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5_change ~ fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center + fit_gauss_sigmasq_center + hg_coeff_0_center + hg_coeff_2_center + hg_coeff_3_center + hg_coeff_4_center + hg_coeff_5_center + hg_coeff_6_center + hg_coeff_7_center, current_df )
+
+vif(currentlm)
+```
+
+```{r}
+rm(current_df, currentlm, covars)
+```
+
+# average approach
+
+```{r}
+# covariates
+covars = c("rv_template_0.5","fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+```
+
+```{r}
+current_df = final_df %>%
+  mutate(date = factor(date)) %>%
+  group_by(date) %>%
+  summarize_at(covars, mean) %>%
+  ungroup() %>%
+  mutate_at(covars[-1], centerFun) %>%
+  mutate_at(covars[-1], scaleFun) %>%
+  mutate_at(covars[1], changeFun)
+current_df
+```
+
+
+```{r}
+avg.pca = prcomp(current_df[,-c(1,2)], center = T, scale = T, retx = T)
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5 ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 +PC8+PC9+PC10, cbind( current_df, avg.pca$x ))
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5 ~ fit_gauss_a + fit_gauss_b + fit_gauss_depth + fit_gauss_sigmasq + hg_coeff_0 + hg_coeff_2 + hg_coeff_3 + hg_coeff_4 + hg_coeff_5 + hg_coeff_6 + hg_coeff_7 , current_df )
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5 ~ fit_gauss_a + fit_gauss_b + fit_gauss_depth + fit_gauss_sigmasq , current_df )
+```
+
+```{r}
+summary(currentlm)
+```
+
+```{r}
+vif(currentlm)
+```
+
+```{r}
+vif(currentlm)
+```
+
+```{r}
+
+```
+
+
+```{r}
+pairs(current_df %>% select(fit_gauss_a, fit_gauss_b,   fit_gauss_depth, fit_gauss_sigmasq, hg_coeff_0, hg_coeff_2))
+```
+
+```{r}
+current_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = as.Date(date), y = rv_template_0.5))
+```
+
+```{r}
+current_df %>%
+  mutate(date = as.Date(date)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = current_df$rv_template_0.5 - currentlm$fitted.values))
+```
+
+
+
+```{r}
+plot(currentlm,1)
+```
+
+```{r}
+plot(currentlm,2)
+```
+
+
+## with pca
+
+```{r}
+# covariates
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+
+# covars we want to do PCA on
+covars.pca = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", 
+             "fit_gauss_sigmasq", "hg_coeff_0", 
+             "hg_coeff_2", "hg_coeff_3", "hg_coeff_4", 
+             "hg_coeff_5", "hg_coeff_6", "hg_coeff_7", 
+             "hg_coeff_8", "hg_coeff_9", "hg_coeff_10")
+
+# load in current data frame
+select.df = final_df %>% select( all_of(c("rv_template_0.5","line_order","date",covars)) )
+```
+
+```{r}
+standardized = standardize(current_df = select.df,
+                                      covars = covars,
+                                      covars.pca = covars.pca,
+                                      trainTestSplit = F,
+                                      responseChange = F)
+```
+
+```{r}
+newCovars = c("rv_template_0.5","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10")
+```
+
+```{r}
+current_df = standardized %>%
+  mutate(date = factor(date)) %>%
+  group_by(date) %>%
+  summarize_at(newCovars, mean) %>%
+  ungroup() %>%
+  mutate_at(newCovars[-1], centerFun) %>%
+  mutate_at(newCovars[-1], scaleFun) %>%
+  mutate_at(newCovars[1], changeFun)
+current_df
+```
+
+```{r}
+# fit model
+currentlm = lm(rv_template_0.5 ~ PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, current_df )
+```
+
+```{r}
+summary(currentlm)
+```
+
+
+```{r}
+vif(currentlm)
+```
+
+```{r}
+pairs(current_df %>% select(PC1, PC2, PC3, PC4, PC5, PC6, PC7))
+```
+
+```{r}
+plot(currentlm)
+```
+

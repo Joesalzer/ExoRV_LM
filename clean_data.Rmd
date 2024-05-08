@@ -330,7 +330,7 @@ final_fits_10kmps = final_fits_10kmps %>%
 rename gh to hg
 
 ```{r}
-colnames(final_fits_10kmps) = str_replace_all(colnames(final_fits_10kmps), "gh_", "hg_")
+colnames(final_fits_10kmps) = str_replace_all( colnames(final_fits_10kmps), "gh_", "hg_" )
 ```
 
 column for which order has higher snr for repeated lines

@@ -133,23 +133,9 @@ df
 
 
 ```{r}
-model = lm(response ~ 0 + x + y + z, df )
+model = lm(response ~ x + y + z, df )
 sum = summary( model )
 sum
-```
-
-```{r}
-mu_x - c()
-```
-
-```{r}
-V = vcov(model)
-V
-```
-
-
-```{r}
-0.6943^2*solve( t(model.matrix(model)) %*% model.matrix(model))
 ```
 
 ```{r}
@@ -158,62 +144,49 @@ refGrid
 ```
 
 ```{r}
+# create a manual refrence grid
 manualgrid = with(df, expand.grid(
   x = levels(unique(df$x)),
   y = levels(unique(df$y)),
   z = mean(df$z) ) )
-
+manualgrid
+# design matrix
 X = model.matrix(~ x+y+z, data = manualgrid)
+X
+# covariance of coefficients
 V = vcov(model)
+V
 ```
 
 
 ```{r}
+# manual predictions match with ref_grid summary
 X %*% model$coefficients
-```
-
-```{r}
 refGrid$prediction
 ```
 
-var-covar matrix of predictions:
-
 ```{r}
+# var-covar matrix of predictions:
 predVar = X %*% V %*% t(X)
 predVar
 ```
 
 ```{r}
-sqrt(diag(predVar))
+# manual predictions match with ref_grid summary
+sqrt( diag(predVar) )
+refGrid$SE
 ```
 
-```{r}
-summary(ref_grid(model))$SE
-```
 
 ```{r}
+# emmeans for either first or second factor
 summary(emmeans(model, specs = "x")) 
 summary(emmeans(model, specs = "y")) 
 ```
 
-```{r}
-mu_x
-```
-
-```{r}
-summary(emmeans(model, specs = "x"))$emmean - mu_x
-```
-
-```{r}
-summary(emmeans(model, specs = "y"))$emmean - mu_y
-```
+*The empirical marginal mean is the predicted value, using the average of continuous vars and averaging across the other factor*
 
 
-```{r}
-refGrid
-
-predVar
-```
 
 For x's:
 ```{r}
