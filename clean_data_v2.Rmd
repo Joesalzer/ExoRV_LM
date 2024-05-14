@@ -109,6 +109,10 @@ constantLines = sd.df$line_order
 ```
 
 ```{r}
+
+```
+
+```{r}
 final_df %>%
   filter(line_order %in% constantLines) %>%
   group_by(line_order) %>%

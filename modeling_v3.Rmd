@@ -94,7 +94,7 @@ Y = current_df$rv_template_0.5
 ```
 
 ```{r}
-#X[c(1:5,(1+345):(5+345)), c(1:5,(1+910):(5+910))]
+X[c(1:5,(1+345):(5+345)), c(1:5,(1+910):(5+910))]
 ```
 
 
@@ -300,20 +300,20 @@ ggplot() +
 
 ```{r}
 # covariates
-covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq","thg_coeff_0","thg_coeff_3","thg_coeff_2","thg_coeff_4", "thg_coeff_5")
+covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq","hg_coeff_0","hg_coeff_2","hg_coeff_4","hg_coeff_6")
 
 # get rv dataframe
 current_df = standardize(final_df, covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
   mutate(date = factor(date),
          line_order = factor(line_order)) %>%
-  select(rv_template_0.5, line_order, date, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered, thg_coeff_0_centered, thg_coeff_2_centered, thg_coeff_3_centered, thg_coeff_4_centered, thg_coeff_5_centered)
+  select(rv_template_0.5, line_order, date, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered, hg_coeff_0_centered, hg_coeff_2_centered, hg_coeff_4_centered, hg_coeff_6_centered)
 
 # (sparse) design matrix for model
-X = sparse.model.matrix(~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + thg_coeff_0_centered + thg_coeff_2_centered + thg_coeff_3_centered + thg_coeff_4_centered + thg_coeff_5_centered, current_df )
+X = sparse.model.matrix(~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + hg_coeff_0_centered + hg_coeff_2_centered + hg_coeff_4_centered + hg_coeff_6_centered, current_df )
 # responses
 Y = current_df$rv_template_0.5
 
-rm(current_df)
+#rm(current_df)
 ```
 
 ```{r}
@@ -321,19 +321,24 @@ rm(current_df)
 covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq")
 
 # get rv dataframe
-current_df = standardize(final_df, covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
+current_df = final_df %>%
+  filter(!(line_order %in% constantLines)) %>%
+  standardize(covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
   mutate(date = factor(date),
          line_order = factor(line_order)) %>%
-  select(rv_template_0.5, line_order, date, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered)
+  select(rv_template_0.5, line_order,lambdac_vald, date, fit_gauss_a_centered, fit_gauss_b_centered, fit_gauss_depth_centered, fit_gauss_sigmasq_centered)
 
 # (sparse) design matrix for model
-X = sparse.model.matrix(~ line_order + date + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered, current_df )
+X = sparse.model.matrix(~ (line_order + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + fit_gauss_a_centered + fit_gauss_b_centered)^2, current_df )
 # responses
 Y = current_df$rv_template_0.5
 
-rm(current_df)
+#rm(current_df)
 ```
 
+```{r}
+dim(X)
+```
 
 ```{r}
 # fit the linear model using all data
@@ -358,6 +363,23 @@ coef_df %>%
   ylab("change from baseline")
 ```
 
+```{r}
+ggplot() +
+  geom_point(mapping = aes(y = fit_lm$resid[,1], x = fit_lm$y_hat[,1], color = ), size = .5, alpha = .5)
+ggplot() +
+  geom_point(mapping = aes(y = fit_lm$resid[,1], x = Y), size = .5, alpha = .5)
+```
+
+
+
+```{r}
+ggplot() +
+  geom_density(mapping = aes(x = Y), color = "purple") +
+  geom_density(mapping = aes(x = fit_lm$resid[,1]), color = "orange") +
+  xlim(-100,100)
+```
+
+## bootstrap
 *bootstrap coefficients replicates*
 
 ```{r}
@@ -451,6 +473,140 @@ ggplot( mapping = aes(x = final_days) ) +
   geom_point(mapping = aes(y = day_mean), size = .5) +
   geom_errorbar(mapping = aes(ymin = day_lower95, ymax = day_upper95), color = "black", linewidth = .2) +
   geom_hline(yintercept = 0, color = "red")
+```
+
+# line + shape interactions
+
+```{r}
+# covariates
+covars = c("hg_coeff_1","hg_coeff_0")
+
+# get rv dataframe
+current_df = standardize(final_df, covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order)) %>%
+  select(rv_template_0.5, line_order, date, hg_coeff_0, hg_coeff_1, hg_coeff_0_centered, hg_coeff_1_centered)
+
+# (sparse) design matrix for model
+X = sparse.model.matrix(~ line_order*hg_coeff_1_centered, current_df )
+# responses
+Y = current_df$rv_template_0.5
+
+#rm(current_df)
+```
+
+```{r}
+# covariates
+covars = c("hg_coeff_1","hg_coeff_0")
+
+# get rv dataframe
+current_df = standardize(final_df, covars, RESPONSE_CHANGE = F, TRAIN_TEST_SPLIT = F) %>%
+  mutate(date = factor(date),
+         line_order = factor(line_order)) %>%
+  select(rv_template_0.5, line_order, date, hg_coeff_0, hg_coeff_1, hg_coeff_0_centered, hg_coeff_1_centered)
+
+# (sparse) design matrix for model
+X = sparse.model.matrix(~ line_order*hg_coeff_1_centered, current_df )
+# responses
+Y = current_df$rv_template_0.5
+
+#rm(current_df)
+```
+```{r}
+X[c(1:5,345:350),c(1:3,909:912)]
+```
+
+
+```{r}
+# fit the linear model using all data
+fit_lm = sparseLM(X,Y)
+```
+
+```{r}
+# dataframe of coefficients of current model
+coef_df = tibble( coef = rownames( fit_lm$beta_hat ),
+                  estimate = fit_lm$beta_hat[,1],
+                  se = sqrt( diag(fit_lm$var_beta_hat) ) )
+```
+
+
+```{r}
+dim(fit_lm$beta_hat)
+```
+
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(y = fit_lm$resid[,1], x = fit_lm$y_hat[,1]), size = .5, alpha = .5)
+```
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(y = fit_lm$resid[,1], x = Y), size = .5, alpha = .5)
+```
+
+```{r}
+ggplot() +
+  geom_density(mapping = aes(x = Y), color = "purple") +
+  geom_density(mapping = aes(x = fit_lm$resid[,1]), color = "orange") +
+  xlim(-50,50)
+```
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(y = Y, x = fit_lm$y_hat[,1]), size = .3, alpha = .5) +
+  geom_abline(slope = 1, linetype = 2)
+```
+
+
+```{r}
+current_df %>%
+  mutate(pred_rv = fit_lm$y_hat[,1],
+         resid = fit_lm$resid[,1]) %>%
+  filter(line_order == final_line_order[310]) %>%
+  ggplot() +
+  geom_point(aes(x = as.Date(date), y = resid), color = "orange", alpha = .7, size = .8) +
+  geom_point(aes(x = as.Date(date), y = rv_template_0.5), color = "purple", alpha = .7, size = .8) +
+  ggtitle(final_line_order[310]) +
+  xlab("day") +
+  ylab("rv")
+current_df %>%
+  mutate(pred_rv = fit_lm$y_hat[,1],
+         resid = fit_lm$resid[,1]) %>%
+  filter(line_order == final_line_order[600]) %>%
+  ggplot() +
+  geom_point(aes(x = as.Date(date), y = resid), color = "orange", alpha = .7, size = .8) +
+  geom_point(aes(x = as.Date(date), y = rv_template_0.5), color = "purple", alpha = .7, size = .8) +
+  ggtitle(final_line_order[600])+
+  xlab("day") +
+  ylab("rv")
+current_df %>%
+  mutate(pred_rv = fit_lm$y_hat[,1],
+         resid = fit_lm$resid[,1]) %>%
+  filter(line_order == final_line_order[800]) %>%
+  ggplot() +
+  geom_point(aes(x = as.Date(date), y = resid), color = "orange", alpha = .7, size = .8) +
+  geom_point(aes(x = as.Date(date), y = rv_template_0.5), color = "purple", alpha = .7, size = .8) +
+  ggtitle(final_line_order[800])+
+  xlab("day") +
+  ylab("rv")
+current_df %>%
+  mutate(pred_rv = fit_lm$y_hat[,1],
+         resid = fit_lm$resid[,1]) %>%
+  filter(line_order == final_line_order[100]) %>%
+  ggplot() +
+  geom_point(aes(x = as.Date(date), y = resid), color = "orange", alpha = .7, size = .8) +
+  geom_point(aes(x = as.Date(date), y = rv_template_0.5), color = "purple", alpha = .7, size = .8) +
+  ggtitle(final_line_order[100])+
+  xlab("day") +
+  ylab("rv")
+```
+
+```{r}
+current_df %>%
+  mutate(pred_rv = fit_lm$y_hat[,1],
+         resid = fit_lm$resid[,1]) %>%
+  filter(line_order == "3916.3166_18")
 ```
 
 # MIXED small model

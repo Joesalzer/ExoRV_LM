@@ -1,0 +1,189 @@
+---
+title: "NEID Solar Data -- loading files"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#library(MASS)
+source("readSpectra.R")
+```
+
+# Loading data
+
+## file lists
+
+```{r}
+# list of files in raw_spectrum_files
+file_list = list.files("raw_spectrum_files")
+```
+
+```{r}
+# list of solar spectrum files
+solarspectrum_list = file_list[!is.na( str_extract(file_list,"solar_spectrum") )]
+# get dates for solar spectrum
+all_dates = str_sub( str_split_fixed(solarspectrum_list,"_",n=3)[,3], end = -4 )
+```
+
+```{r}
+# list of line files
+line_list = file_list[!is.na( str_extract(file_list,"line") )]
+# get line-orders 
+all_lineorders = str_sub( str_split_fixed(line_list,"_",n=2)[,2], end = -4 )
+```
+
+```{r}
+# list of line property files
+lineProp_list = list.files("line_property_files")
+# get line-orders, from line property (shape) files
+all_lineorders_prop = str_sub( str_split_fixed(lineProp_list,"_",n=2)[,2], end = -8 )
+```
+
+## summaries
+
+```{r}
+# number of spectra
+length(solarspectrum_list)
+# number of lines within spectra
+length(line_list)
+# number of lines from line property files
+length(all_lineorders_prop)
+```
+
+# read solar spectra
+
+```{r}
+# example solar spectrum
+solarspectrum_list[1]
+spectra_df = loadSolarFile(solarspectrum_list[1])
+```
+
+```{r}
+head(spectra_df)
+```
+
+```{r}
+summary( spectra_df )
+```
+
+```{r}
+# single order
+spectra_df %>%
+  filter(order == 63) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = flux_norm), size = .2)
+```
+
+```{r}
+# single order
+spectra_df %>%
+  filter(order == 63,
+         lambda < 5520,
+         lambda > 5510) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = flux_norm), size = .2)
+```
+
+```{r}
+rm(spectra_df)
+```
+
+# read single line
+
+```{r}
+# example line
+line_list[1]
+line_df = loadLineFile( line_list[1] )
+```
+
+```{r}
+head(line_df)
+```
+
+```{r}
+summary( line_df )
+```
+
+```{r}
+line_df %>%
+  filter(date %in% all_dates[c(1,101,202)]) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = flux_norm, color = factor(date) ), size = .5)
+```
+
+```{r}
+line_df %>%
+  filter(date %in% all_dates[c(1,101,202)],
+         lambda < 3895.8,
+         lambda > 3895.4) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = flux_norm, color = factor(date) ), size = .7) +
+  geom_line(mapping = aes(x = lambda, y = flux_norm, color = factor(date) ), alpha = .5)
+```
+
+```{r}
+rm(line_df)
+```
+
+# read a single line's property files
+
+```{r}
+# read a line's property file in
+lineProp_list[1]
+single_lineprop = loadLineShape(lineProp_list[1])
+```
+
+## template
+
+```{r}
+single_lineprop$template.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = lambda, y = flux))
+```
+
+## hg reconstructed
+```{r}
+single_lineprop$reconstruct.df
+```
+
+```{r}
+single_lineprop$reconstruct.df %>%
+  select(date, starts_with("gh")) %>%
+  pivot_longer(!date, names_to = "gh_pixel", values_to = "flux") %>%
+  mutate(pixel = as.numeric(str_split_fixed(gh_pixel,"\\.",2)[,2]) ) %>%
+  filter(date %in% all_dates[c(1,101,202)]) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = pixel, y = flux, color = date), size = .5) +
+  geom_line(mapping = aes(x = pixel, y = flux, color = date ), alpha = .5)
+```
+
+
+```{r}
+single_lineprop$reconstruct.df %>%
+  select(date, starts_with("tgh")) %>%
+  pivot_longer(!date, names_to = "gh_pixel", values_to = "flux") %>%
+  mutate(pixel = as.numeric(str_split_fixed(gh_pixel,"\\.",2)[,2]) ) %>%
+  filter(date %in% all_dates[c(1,101,202)]) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = pixel, y = flux, color = date), size = .5) +
+  geom_line(mapping = aes(x = pixel, y = flux, color = date ), alpha = .5)
+```
+
+## line property
+
+```{r}
+head(single_lineprop$line.df)
+```
+
+
+# project_template_deriv_onto_gh
+
+```{r}
+template_deriv_onto_gh = H5Fopen("project_template_deriv_onto_gh.h5")
+```
+
+```{r}
+template_deriv_onto_gh$gh_vs_mps_coeffs
+```

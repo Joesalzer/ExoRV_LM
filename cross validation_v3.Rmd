@@ -72,9 +72,7 @@ length(final_days)
 covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq","thg_coeff_0","thg_coeff_2","thg_coeff_4")
 ```
 
-```{r}
 
-```
 
 ```{r}
 # get rv dataframe
@@ -106,10 +104,9 @@ covars = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth",
 
 ```{r}
 # get rid of outlier lines
-current.df = final.df %>%
-  filter(!(lambdac_vald %in% outlier.lines)) %>%
-  mutate( line_order = droplevels(line_order) ) %>%
-  filter(date_groups == 1) %>%
+current.df = final_df %>%
+  #filter(!(lambdac_vald %in% outlier.lines)) %>%
+  #mutate( line_order = droplevels(line_order) ) %>%
   dplyr::select( rv_template_0.5, date, line_order, all_of(covars) )
 head(current.df)
 ```
@@ -137,7 +134,7 @@ dayIndex = c(20:30)
 ```
 
 ```{r}
-trainAndTest = standardize(current.df,dayIndex)
+trainAndTest = standardize(current.df, covars, test_index = dayIndex, TRAIN_TEST_SPLIT = T)
 train.df = trainAndTest[[1]]
 test.df = trainAndTest[[2]]
 
@@ -148,7 +145,7 @@ head(test.df)
 
 ```{r}
 # hg fit model
-currentlm = lm(rv_template_0.5 ~ date + line_order + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center +fit_gauss_sigmasq_center + hg_coeff_0_center + hg_coeff_2_center + hg_coeff_3_center + hg_coeff_4_center + hg_coeff_5_center + hg_coeff_6_center + hg_coeff_7_center, train.df )
+currentlm = lm(rv_template_0.5 ~ date + line_order + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + thg_coeff_0_centered + thg_coeff_2_centered + thg_coeff_3_centered + thg_coeff_4_centered + thg_coeff_5_centered + thg_coeff_6_centered + thg_coeff_7_centered, train.df )
 ```
 
 ```{r}
@@ -196,7 +193,7 @@ hg model removing outlier (date + line fixed effects, all days)
 
 ```{r}
 # get the data matrix of our test dataset, SAME FORM AS ABOVE MODEL WITHOUT DATE
-Xtest = model.matrix(rv_template_0.5 ~ line_order + fit_gauss_a_center + fit_gauss_b_center + fit_gauss_depth_center +fit_gauss_sigmasq_center + hg_coeff_0_center + hg_coeff_2_center + hg_coeff_3_center + hg_coeff_4_center + hg_coeff_5_center + hg_coeff_6_center + hg_coeff_7_center, test.df)
+Xtest = model.matrix( ~ line_order + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + thg_coeff_0_centered + thg_coeff_2_centered + thg_coeff_3_centered + thg_coeff_4_centered + thg_coeff_5_centered + thg_coeff_6_centered + thg_coeff_7_centered, test.df)
 ```
 
 ```{r}
