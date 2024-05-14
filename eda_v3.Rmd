@@ -118,11 +118,15 @@ final_df %>%
 ```{r}
 final_df %>%
   group_by(line_order) %>%
-  mutate(meanSNR = mean(mean_snr_pixel)) %>%
+  mutate(meanSNR = mean(mean_snr_pixel),
+         meanRV = mean(rv_template_0.5),
+         sdRV = sd(rv_template_0.5)) %>%
   ungroup() %>%
-  filter(lambdac_vald < 9000) %>%
+  filter(lambdac_vald < 9000,
+         sdRV < 20) %>%
+  filter( !(order_idx %in% c(56,57,58)) ) %>%
   ggplot() +
-  geom_point(mapping = aes(x = meanSNR, y = abs(rv_template_0.5), color = lambdac_vald), alpha = .5, size = .5)
+  geom_point(mapping = aes(x = meanSNR, y = abs(rv_template_0.5 - meanRV) , color = order_idx), size = .5)
 ```
 
 ```{r}
@@ -134,10 +138,6 @@ final_df %>%
   #filter(lambdac_vald < 9000) %>%
   ggplot() +
   geom_point(mapping = aes(x = mean_snr_pixel, y = sdRV, color = lambdac_vald), alpha = .5, size = .5)
-```
-
-```{r}
-final_df
 ```
 
 ```{r}
@@ -161,9 +161,23 @@ final_df %>%
   mutate(pixelLocation = (pixel_extracted_hi + pixel_extracted_lo)/2 ) %>%
   group_by(line_order) %>%
   summarize(meanRV = mean(rv_template_0.5),
+            sdRV = sd(rv_template_0.5),
             pixel = mean(pixelLocation)) %>%
   ggplot() +
-  geom_point(mapping = aes(x = pixel, y = meanRV), size = .2)
+  geom_point(mapping = aes(x = meanRV, y = sdRV), size = .2) +
+  ylim(0,40) +
+  xlim(-20,20)
+```
+
+```{r}
+final_df %>%
+  mutate(pixelLocation = (pixel_extracted_hi + pixel_extracted_lo)/2 ) %>%
+  group_by(line_order) %>%
+  summarize(meanRV = mean(rv_template_0.5),
+            pixel = mean(pixelLocation)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = pixel, y = meanRV), size = .2) +
+  ylim(-100,100)
 ```
 
 

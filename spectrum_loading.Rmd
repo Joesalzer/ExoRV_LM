@@ -7,17 +7,23 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-#library(MASS)
 source("readSpectra.R")
 ```
 
 # Loading data
 
+```{r}
+# working directory
+wd = "/Users/josephsalzer/research/exostat/"
+```
+
+change working directory to wherever raw_spectrum_files and line_property_files is located
+
 ## file lists
 
 ```{r}
 # list of files in raw_spectrum_files
-file_list = list.files("raw_spectrum_files")
+file_list = list.files(str_c(wd,"raw_spectrum_files"))
 ```
 
 ```{r}
@@ -34,9 +40,10 @@ line_list = file_list[!is.na( str_extract(file_list,"line") )]
 all_lineorders = str_sub( str_split_fixed(line_list,"_",n=2)[,2], end = -4 )
 ```
 
+
 ```{r}
 # list of line property files
-lineProp_list = list.files("line_property_files")
+lineProp_list = list.files(str_c(wd,"line_property_files"))
 # get line-orders, from line property (shape) files
 all_lineorders_prop = str_sub( str_split_fixed(lineProp_list,"_",n=2)[,2], end = -8 )
 ```
@@ -57,7 +64,7 @@ length(all_lineorders_prop)
 ```{r}
 # example solar spectrum
 solarspectrum_list[1]
-spectra_df = loadSolarFile(solarspectrum_list[1])
+spectra_df = loadSolarFile(solarspectrum_list[1], wd_data = str_c(wd,"raw_spectrum_files/"))
 ```
 
 ```{r}
@@ -95,7 +102,7 @@ rm(spectra_df)
 ```{r}
 # example line
 line_list[1]
-line_df = loadLineFile( line_list[1] )
+line_df = loadLineFile( line_list[1], wd_data = str_c(wd,"raw_spectrum_files/") )
 ```
 
 ```{r}
@@ -106,16 +113,17 @@ head(line_df)
 summary( line_df )
 ```
 
+
 ```{r}
 line_df %>%
-  filter(date %in% all_dates[c(1,101,202)]) %>%
+  filter(date %in% sample(all_dates, 3) ) %>%
   ggplot() +
   geom_point(mapping = aes(x = lambda, y = flux_norm, color = factor(date) ), size = .5)
 ```
 
 ```{r}
 line_df %>%
-  filter(date %in% all_dates[c(1,101,202)],
+  filter(date %in% sample(all_dates, 3),
          lambda < 3895.8,
          lambda > 3895.4) %>%
   ggplot() +
@@ -132,7 +140,7 @@ rm(line_df)
 ```{r}
 # read a line's property file in
 lineProp_list[1]
-single_lineprop = loadLineShape(lineProp_list[1])
+single_lineprop = loadLineShape(lineProp_list[1], wd_data = str_c(wd,"line_property_files/"))
 ```
 
 ## template
@@ -153,7 +161,7 @@ single_lineprop$reconstruct.df %>%
   select(date, starts_with("gh")) %>%
   pivot_longer(!date, names_to = "gh_pixel", values_to = "flux") %>%
   mutate(pixel = as.numeric(str_split_fixed(gh_pixel,"\\.",2)[,2]) ) %>%
-  filter(date %in% all_dates[c(1,101,202)]) %>%
+  filter(date %in% sample(all_dates, 3)) %>%
   ggplot() +
   geom_point(mapping = aes(x = pixel, y = flux, color = date), size = .5) +
   geom_line(mapping = aes(x = pixel, y = flux, color = date ), alpha = .5)
@@ -165,7 +173,7 @@ single_lineprop$reconstruct.df %>%
   select(date, starts_with("tgh")) %>%
   pivot_longer(!date, names_to = "gh_pixel", values_to = "flux") %>%
   mutate(pixel = as.numeric(str_split_fixed(gh_pixel,"\\.",2)[,2]) ) %>%
-  filter(date %in% all_dates[c(1,101,202)]) %>%
+  filter(date %in% sample(all_dates, 3)) %>%
   ggplot() +
   geom_point(mapping = aes(x = pixel, y = flux, color = date), size = .5) +
   geom_line(mapping = aes(x = pixel, y = flux, color = date ), alpha = .5)
@@ -177,6 +185,15 @@ single_lineprop$reconstruct.df %>%
 head(single_lineprop$line.df)
 ```
 
+```{r}
+single_lineprop$line.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = as.Date(date), y = fit_gauss_depth))
+
+single_lineprop$line.df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = as.Date(date), y = rv_template_0.5))
+```
 
 # project_template_deriv_onto_gh
 
