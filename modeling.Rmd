@@ -5,1260 +5,1025 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+This file is rstudio script for testing all of our modeling
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(tidyverse)
-library(stringr)
-library(lme4)
-library(MASS)
-library(gridExtra)
-library(car)
-library(emmeans)
-library(glmnet)
+source("readSpectra.R")
+library(Matrix)
+library(parallel)
+library(pbmcapply)
+```
+
+# linear modeling
+
+pass covariateNames to script
+```{r}
+covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_hg_coeff_", c(0,seq(2,10,1))))
+# covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_thg_coeff_", c(0,seq(2,10,1))))
+# covariateNames = c()
+
+print(covariateNames)
+```
+
+fit_gauss_a,fit_gauss_b,fit_gauss_depth,fit_gauss_sigmasq,proj_hg_coeff_0,proj_hg_coeff_2,proj_hg_coeff_3,proj_hg_coeff_4,proj_hg_coeff_5,proj_hg_coeff_6,proj_hg_coeff_7,proj_hg_coeff_8,proj_hg_coeff_9,proj_hg_coeff_10
+
+*random variables*
+```{r}
+# completeLines_df[paste0("rand_col", 1:14)] = lapply(1:14, function(x) rnorm(nrow(completeLines_df)))
+# covariateNames = str_c("rand_col", 1:14)
+# covariateNames
 ```
 
 ```{r}
-## Data directory
-wd_data = "/Users/josephsalzer/research/exostat/"
+# get csv file name
+csvFileName = "completeLines.csv"
 ```
 
-# Loading data
+## setting variables and loading data
+
+variables to be set by the user
 
 ```{r}
-# get species info for each line
-species.df = read_csv(str_c(wd_data,"neid_solar/","clean_line_info.csv")) %>%
-  dplyr::select(lambda, species, excitation_energy) %>%
-  mutate(lambda = factor( round(lambda,3) ),
-         species = factor(species)) %>%
+# working directory with the data
+WD_DATA = "/Users/josephsalzer/research/exostat/"
+# RESPONSE variable
+RESPONSE = "rv_template_0.5"
+# names of the timeID, lineID, and timeGroupID
+TIME_ID_NAME = "date"
+LINE_ID_NAME = "line_order"
+TIMEGROUP_ID_NAME = "date_groups"
+# csv file name
+completeLines_df = read_csv(str_c(WD_DATA,csvFileName)) %>%
+  mutate(!!TIME_ID_NAME := as.Date( !!sym(TIME_ID_NAME) ))
+```
+
+## get list of lineIDs and timeIDs
+
+```{r}
+# vec of LineIDs  in completeLines_df
+lineIDs = completeLines_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
+# vec of timeIDs in completeLines_df
+timeIDs = completeLines_df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME))
+T_ = length(timeIDs)
+L_ = length(lineIDs)
+```
+
+## create model formula and subdirectories
+
+```{r}
+# create directory called "models" in working directory
+if (!dir.exists(str_c(WD_DATA,"models"))) {dir.create(str_c(WD_DATA,"models"))}
+
+# base TWFE formula
+twfe_formula = paste0("~ ",TIME_ID_NAME," + ",LINE_ID_NAME)
+
+# if covariateNames aren't empty, include interactions, else use TWFE
+if (!is_empty(covariateNames)) {
+  # build interactions with LINE_ID_NAME for each provided centered covariate
+  covar_slopes = paste0(LINE_ID_NAME,":", covariateNames, "_centered", collapse = " + ")
+  # construct the full formula
+  modelFormula = as.formula(paste(twfe_formula, covar_slopes, sep = " + "))
+  
+  # name the current model, using Gaussian fit parameters and hg covariateNames
+  ## remove or edit these lines if using other covariateNames ##
+  gaussCovars = covariateNames[startsWith(covariateNames,"fit_gauss")]
+  gaussCovars_names = paste(str_split_i(gaussCovars, "_", i = 3),collapse=",")
+  if (gaussCovars_names=="") {gaussCovars_names = "none"} else if(length(gaussCovars) == 4) {gaussCovars_names = "all"}
+  hgCovars = covariateNames[startsWith(covariateNames,"proj_hg_coeff_")]
+  hgCovars_names = paste(str_split_i(hgCovars, "_", i = 4),collapse=",")
+  if (hgCovars_names=="") {hgCovars_names = "none"} else if(length(hgCovars) == 10) {hgCovars_names = "all"}
+  model_name = str_c("Gauss=",gaussCovars_names,"_HG=",hgCovars_names)
+  
+  # create model directory
+  model_dir = str_c(WD_DATA,"models/",model_name)
+  if (!dir.exists(model_dir)) {dir.create(model_dir)}
+
+  rm(twfe_formula,covar_slopes,gaussCovars,gaussCovars_names,hgCovars,hgCovars_names)
+} else {
+  # if empty, just fit TWFE
+  modelFormula = as.formula(twfe_formula)
+  # model name
+  model_name = "TWFE"
+  # create model directory
+  model_dir = str_c(WD_DATA,"models/",model_name)
+  if (!dir.exists(model_dir)) {dir.create(model_dir)}
+  rm(twfe_formula)
+}
+
+cat("The model formula is:\n", as.character(modelFormula), "\n")
+cat("The model name is:", model_name, "\n")
+```
+
+below are special types of the linear models, common slopes for covariateNames, and multiple intercept/slope per lineID/time group models
+
+*random covars*
+```{r}
+model_name = "random_covars"
+model_dir = str_c(WD_DATA,"models/",model_name)
+# create directory
+if (!dir.exists(model_dir)) {dir.create(model_dir)}
+```
+
+*COMMON SLOPES*
+```{r}
+# covariateNames
+covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_hg_coeff_", c(0,seq(2,10,1))))
+
+modelFormula = as.formula(~ date + line_order + fit_gauss_a_centered + fit_gauss_b_centered + fit_gauss_depth_centered + fit_gauss_sigmasq_centered + proj_hg_coeff_0_centered + proj_hg_coeff_2_centered + proj_hg_coeff_3_centered + proj_hg_coeff_4_centered + proj_hg_coeff_5_centered + proj_hg_coeff_6_centered + proj_hg_coeff_7_centered + proj_hg_coeff_8_centered + proj_hg_coeff_9_centered + proj_hg_coeff_10_centered )
+model_name = "CS_Gauss=all_HG=all"
+model_dir = str_c(WD_DATA,"models/",model_name)
+
+# create directory
+if (!dir.exists(model_dir)) {dir.create(model_dir)}
+```
+
+*multiple intercept + slope model*
+```{r}
+# covariateNames
+covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_hg_coeff_", c(0,seq(2,10,1))))
+
+modelFormula = as.formula(~ date + lineOrderIntercept + lineOrderSlope:fit_gauss_a_centered + lineOrderSlope:fit_gauss_b_centered + lineOrderSlope:fit_gauss_depth_centered + lineOrderSlope:fit_gauss_sigmasq_centered + lineOrderSlope:proj_hg_coeff_0_centered + lineOrderSlope:proj_hg_coeff_2_centered + lineOrderSlope:proj_hg_coeff_3_centered + lineOrderSlope:proj_hg_coeff_4_centered + lineOrderSlope:proj_hg_coeff_5_centered + lineOrderSlope:proj_hg_coeff_6_centered + lineOrderSlope:proj_hg_coeff_7_centered + lineOrderSlope:proj_hg_coeff_8_centered + lineOrderSlope:proj_hg_coeff_9_centered + lineOrderSlope:proj_hg_coeff_10_centered  )
+model_name = "all_MIMS"
+model_dir = str_c(WD_DATA,"models/",model_name)
+
+# create directory
+if (!dir.exists(model_dir)) {dir.create(model_dir)}
+```
+
+## standardize dataframe
+
+center by lineID, scaling each continuous column. We can "inject" a planet here, by changing the amplitude, frequency, and horizontal offset 
+
+no planet
+```{r}
+# get standardized rv arranging by line_order and then date
+rv_df = ( completeLines_df %>%
+  standardize(covariates = covariateNames) )$train.df %>%
+  arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+```
+
+*with planet*
+```{r}
+AMP = 3
+HORIZONTAL_OFFSET = 0
+VERTICAL_OFFSET = 0
+FREQ = 2*pi/250
+
+# get standardized rv, with an injected planet, arranging by line_order and then date
+rv_df = ( injectPlanet(completeLines_df, amp = AMP, freq = FREQ, horizontal_offset = HORIZONTAL_OFFSET, vertical_offset = VERTICAL_OFFSET) %>%
+  standardize(covariates = covariateNames ) )$train.df %>%
+  arrange(!!sym(LINE_ID_NAME), !!sym(TIME_ID_NAME))
+
+# mean offset for non-noisy planet signal, noisy planet signal, and noise (original rv signal)
+rv_df %>%
+  select(date,date_groups,pert_val,pert_rv,rv_template_0.5) %>%
+  unique() %>%
+  group_by(date_groups) %>%
+  summarize(planet_offset = mean(pert_val),
+            noisePlanet_offset = mean(pert_rv),
+            noise_offset = mean(rv_template_0.5))
+
+estimated_rv = rv_df %>%
+  group_by(date) %>%
+  summarize(est_rv = mean(pert_rv))
+
+seq_days = seq(min(estimated_rv$date), max(estimated_rv$date), by = 1)
+
+ggplot() +
+  geom_point(mapping = aes(x = estimated_rv$date, y = estimated_rv$est_rv)) +
+  geom_line(mapping = aes(x = seq_days,
+                          y = VERTICAL_OFFSET + AMP*sin(FREQ*changeFun(as.numeric(seq_days))+HORIZONTAL_OFFSET) ) )
+
+rm(AMP,HORIZONTAL_OFFSET,VERTICAL_OFFSET,FREQ,estimated_rv,seq_days)
+```
+
+
+## set contrasts and make design matrix
+
+*group sum2zero for timeIDs, sum2zero for lineIDs (single intercept, single slope model)*
+
+```{r}
+# create factors out of date + line_order
+temp_df = rv_df %>%
+    mutate(!!TIME_ID_NAME := factor( !!sym(TIME_ID_NAME) ),
+           !!LINE_ID_NAME := factor( !!sym(LINE_ID_NAME) ))
+
+# get group sizes
+timeGroup_ids = temp_df %>%
+  dplyr::select(!!sym(TIMEGROUP_ID_NAME), !!sym(TIME_ID_NAME)) %>%
   unique()
+group_sizes = table(timeGroup_ids[[TIMEGROUP_ID_NAME]])
+
+
+# (sparse) design matrix for model, set contrasts
+designMat = sparse.model.matrix(
+  modelFormula,
+  temp_df,
+  contrasts = setNames(
+    list(contr_groupSum(group_sizes), contr.sum),
+    c(TIME_ID_NAME, LINE_ID_NAME)
+  )
+)  
+
+# get every date in each group used to fit the model, this excludes the last date in each group (which should be sum2zero encoded)
+timeFE_columns = levels(temp_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
+# append the group ID to the end of these columns
+timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
+# rename columns of design matrix, assuming that the first T are the intercept and timeFE
+colnames(designMat)[1:sum(group_sizes)] = c("(Intercept)",
+                                            if (length(group_sizes) > 1) str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1)) else NULL,
+                                            timeFE_columns)
+
+# responses
+responses = temp_df[[RESPONSE]]
+```
+
+```{r}
+designMat[ c(1:4,227:230,T_:(T_+2)),c(1:4,229:230,T_:(T_+2))]
+dim(designMat)
+```
+
+*group sum2zero for timeIDs, sum2zero for lineIDs (multiple intercept, multiple slope model)*
+
+```{r}
+# create factors out of date + line_order and lineOrderIntercept
+temp_df = rv_df %>%
+    mutate(!!TIME_ID_NAME := factor( !!sym(TIME_ID_NAME) ),
+           !!LINE_ID_NAME := factor( !!sym(LINE_ID_NAME) ),
+           lineOrderIntercept = factor(str_c(line_order,"_group",date_groups)),
+           lineOrderSlope = factor(str_c(line_order,"_group",date_groups)))
+
+# get group sizes
+timeGroup_ids = temp_df %>%
+  dplyr::select(!!sym(TIMEGROUP_ID_NAME), !!sym(TIME_ID_NAME)) %>%
+  unique()
+group_sizes = table(timeGroup_ids[[TIMEGROUP_ID_NAME]])
+
+# (sparse) design matrix for model, set contrasts
+designMat = sparse.model.matrix(
+  modelFormula,
+  temp_df,
+  contrasts = setNames(
+    list(contr_groupSum(group_sizes),lineGroupFE_contrast(group_sizes,L_),contr.sum),
+    c(TIME_ID_NAME,"lineOrderIntercept","lineOrderSlope")
+  )
+)  
+
+# get every date in each group used to fit the model, this excludes the last date in each group (which should be sum2zero encoded)
+timeFE_columns = levels(temp_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
+# append the group ID to the end of these columns
+timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
+# rename columns of design matrix, assuming that the first T are the intercept and timeFE
+colnames(designMat)[1:sum(group_sizes)] = c("(Intercept)",
+                                            str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1) ),
+                                            timeFE_columns)
+
+# responses
+responses = temp_df[[RESPONSE]]
+```
+
+```{r}
+designMat[ c(1:5,227:230),c(1:5,229:230)]
+dim(designMat)
+```
+
+*WITH PLANET*
+
+```{r}
+responses = rv_df$pert_rv
+```
+
+## fit model
+
+```{r}
+# fit the linear model using all data
+fit_lm = sparseLM(designMat, responses)
+```
+
+## get time FE results
+
+```{r}
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+# covariance matrix of model parameters
+cov_mat = fit_lm$var_beta_hat
+
+# dataframe of date's cleaned rv
+cleanRV_df = data.frame(
+  timeID = as.Date(timeIDs)
+)
+# find the mle estiamte, var, and se for the intercept plus alpha
+cleanRV_df$estimate = (linear_op_mat %*% fit_lm$beta_hat[,1] )[,1]
+cleanRV_covar = linear_op_mat %*% cov_mat %*% t(linear_op_mat)
+cleanRV_df$var = diag( cleanRV_covar )
+cleanRV_df$se = sqrt(cleanRV_df$var)
+# find rmse of the clean RV
+RMSE = rmse_t(0,cleanRV_df$estimate)
+```
+
+## save fit
+
+```{r}
+saveRDS(list(designMat = designMat,
+             responses = responses,
+             df = temp_df,
+             timeGroup_ids = timeGroup_ids,
+             modelFormula = modelFormula,
+             covariateNames = covariateNames,
+             fit_lm = fit_lm,
+             cleanRV_df = cleanRV_df,
+             RMSE = RMSE),
+        file = str_c(model_dir, "/model.rds" ) )
+```
+
+# leverage calculations
+
+```{r}
+# arguments passed to command line
+# model name
+MODEL_NAME = "Gauss=all_HG=all"
+BATCH_SIZES = 1000
+```
+
+```{r}
+# working directory with the data
+WD_DATA = "/Users/josephsalzer/research/exostat/"
+# read in the model fit
+model_fit = readRDS(str_c(WD_DATA, "models/", MODEL_NAME, "/model.rds"))
+fit_lm = model_fit$fit_lm
+X = model_fit$designMat
+XtX_inv = (fit_lm$var_beta_hat)/fit_lm$sigma2_hat
+```
+
+```{r}
+# directory containing the leverage files
+leverage_dir = str_c(WD_DATA, "models/", MODEL_NAME, "/leverages")
+# create directory called "leverages" in model name
+if ( !dir.exists(leverage_dir) ) {
+  dir.create(leverage_dir)
+}
+```
+
+```{r}
+# optimized leverage computation
+compute_leverage_batches = function(indices) {
+  start_row = indices[1]
+  end_row = indices[2]
+  
+  # extract rows in a batch
+  rows = X[start_row:end_row, , drop = FALSE]
+  # compute leverage for all rows in the batch
+  leverage = rowSums(rows * (rows %*% XtX_inv))
+  
+  names(leverage) = str_c("row",start_row:end_row)
+
+  # save results in a single file for the batch
+  batch_filename = file.path(leverage_dir, str_c("leverage_", start_row, "_", end_row, ".rds"))
+  saveRDS(leverage, file = batch_filename)
+}
+
+# function to create batches
+create_batches = function(n_rows, batch_size) {
+  # start indices of batches
+  starts = seq(1, n_rows, by = batch_size)
+  # end indices of batches
+  ends = pmin(starts + batch_size - 1, n_rows)
+  # combine into a list of start and end indices
+  batches = Map(c, starts, ends)
+  return(batches)
+}
+```
+
+```{r}
+# create batch indices
+batches = create_batches(nrow(X), 1000)
+```
+
+```{r}
+# test
+#compute_leverage_batches(batches[[2]])
+```
+
+```{r}
+# parallel computation of leverage
+result <- pbmclapply(batches, FUN = compute_leverage_batches, mc.cores = 7)
+```
+
+```{r}
+# get the list of all .rds files in the leverage directory
+leverage_files = list.files(path = leverage_dir, pattern = "\\.rds$", full.names = TRUE)
+# initialize an empty vector to store the combined leverage values
+leverages = vector()
+for (file in leverage_files) {
+  leverages = c(leverages, readRDS(file))
+}
+rm(leverage_files)
+```
+
+```{r}
+# add leverages to model_fit
+model_fit$leverages = leverages
+saveRDS(model_fit, file = str_c(WD_DATA, "models/", MODEL_NAME, "/model.rds" ) )
+```
+
+# bootstrap coefficients and residuals
+
+```{r}
+# arguments passed to command line
+# model name
+MODEL_NAME = "Gauss=all_HG=all"
+NUM_BOOTS = 500
+```
+
+```{r}
+# working directory with the data
+WD_DATA = "/Users/josephsalzer/research/exostat/"
+# names of the timeID, lineID, and timeGroupID
+TIME_ID_NAME = "date"
+LINE_ID_NAME = "line_order"
+```
+
+```{r}
+# directory containing the bootstrap files
+bootstrap_dir = str_c(WD_DATA, "models/", MODEL_NAME, "/wild_bootstraps" )
+# create directory called "bootstrap" in model name
+if ( !dir.exists(bootstrap_dir) ) {
+  dir.create(bootstrap_dir)
+}
+```
+
+```{r}
+# read in the model fit
+model_fit = readRDS(str_c(WD_DATA, "models/", MODEL_NAME, "/model.rds"))
+# lm fit, df, design matrix and leverages
+fit_lm = model_fit$fit_lm
+rv_df = model_fit$df
+designMat = model_fit$designMat
+leverages = model_fit$leverages
+
+# vec of LineIDs  in completeLines_df
+lineIDs = rv_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
+# vec of timeIDs in completeLines_df
+timeIDs = as.Date(rv_df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME)))
+  
+T_ = length(timeIDs)
+L_ = length(lineIDs)
+```
+
+```{r}
+# get modified residuals
+u_hat = fit_lm$resid/(1-leverages)
+# get unmodified residuals
+#u_hat = fit_lm$resid
+```
+
+assign blocks for the bootstrap
+```{r}
+# assign blocks for the bootstrap (by line)
+
+block_size = length(timeIDs)
+
+rv_df = rv_df %>%
+  arrange(!!sym(LINE_ID_NAME),!!sym(TIME_ID_NAME)) %>%
+  mutate(boot_block = factor( ceiling(row_number() / block_size) ) )
+```
+
+```{r}
+# # assign blocks for the bootstrap (by line's depth)
+# 
+# block_size = length(lineIDs)/15
+# 
+# blockByLine = rv_df %>%
+#   group_by(line_order) %>%
+#   summarize(mean_depth = mean(fit_gauss_depth)) %>%
+#   arrange(mean_depth) %>%
+#   mutate(boot_block = factor( ceiling(row_number() / block_size) ) )
+# 
+# rv_df = rv_df %>%
+#   merge(blockByLine, by = "line_order")
+# 
+# rm(blockByLine)
+```
+
+```{r}
+# # assign blocks for the bootstrap (by day)
+# 
+# block_size = 3*length(lineIDs)
+# 
+# rv_df = rv_df %>%
+#   arrange(date, line_order) %>%
+#   mutate(boot_block = factor( ceiling(row_number() / block_size) ) ) %>%
+#   arrange(line_order, date)
+```
+
+```{r}
+wildBoot_parallel = function(seedID) {
+  
+  # set a given seed for replication
+  set.seed(seedID)
+  
+  # ensure that the rv_df is arranged first by lineID and then timeID, and that these are factors
+  rv_df = rv_df %>%
+    arrange(!!sym(LINE_ID_NAME), !!sym(TIME_ID_NAME)) %>%
+    mutate( lineID = factor(!!sym(LINE_ID_NAME)),
+            timeID = factor(!!sym(TIME_ID_NAME)))
+  
+  # rademacher random variable for each block in the dataset
+  v = sample( c(-1, 1), size = length(unique(rv_df$boot_block)), replace = TRUE)
+  # generate wild bootstrap residuals by block
+  u_star = u_hat*v[rv_df$boot_block]
+  
+  # construct bootstrap sample
+  y_star = fit_lm$y_hat + u_star
+  # re-estimate the model on bootstrap sample
+  fitstar_lm = sparseLM(designMat, y_star, PRINT_TIME = F)
+
+  # store data
+  saveRDS(fitstar_lm$beta_hat[,1],
+          file = str_c(bootstrap_dir, "/bootstraps_list_", seedID, ".rds" ) )
+  
+}
+```
+
+run wild bootstrap
+
+```{r}
+boot_straps <- pbmclapply(100*( c(1:NUM_BOOTS) + 2000 ), FUN = wildBoot_parallel, mc.cores = 7)
+rm(boot_straps)
+```
+
+# cross validation
+
+```{r}
+# pass on command line
+
+# model name
+MODEL_NAME = "Gauss=all_HG=all"
+# number of timeIDs in each leave-one-out cv
+CV_NUM_DAY = 7
+```
+
+*replace response with planet*
+```{r}
+# working directory with the data
+WD_DATA = "/Users/josephsalzer/research/exostat/"
+# RESPONSE variable
+RESPONSE = "rv_template_0.5"
+# names of the timeID, lineID, and timeGroupID
+TIME_ID_NAME = "date"
+LINE_ID_NAME = "line_order"
+TIMEGROUP_ID_NAME = "date_groups"
+# read in the model fit
+model_fit = readRDS(str_c(WD_DATA, "models/", MODEL_NAME, "/model.rds" ))
+df = model_fit$df
+covariateNames = model_fit$covariateNames
+modelFormula = model_fit$modelFormula
+```
+
+```{r}
+# vec of LineIDs  in completeLines_df
+lineIDs = df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
+# vec of timeIDs in completeLines_df
+timeIDs = as.Date(df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME)))
+  
+T_ = length(timeIDs)
+L_ = length(lineIDs)
+```
+
+```{r}
+# create directory called "cv" in working directory
+if ( !dir.exists(str_c(WD_DATA,"models/",MODEL_NAME,"/cv")) ) {
+  dir.create(str_c(WD_DATA,"models/",MODEL_NAME,"/cv"))
+}
+```
+
+```{r}
+# list of timeIDs to be left out
+left_out_timeIDs = create_sliding_windows(timeIDs, CV_NUM_DAY)
+left_out_timeIDs[[1]]
+left_out_timeIDs[[2]]
+left_out_timeIDs[[3]]
+left_out_timeIDs[[4]]
+```
+
+```{r}
+cv_parallel = function(i) {
+  # get the test set and which day we evaluate on
+  test_set = i$test_set
+  test_day = i$test_day
+  
+  # test index if we leave out a given day/several timeIDs
+  cv_index = ( df[[TIME_ID_NAME]] %in% test_set )  
+  
+  # get standardized rv dataframe, seperate into train and test datasets
+  standardized_list = standardize(df, covariates = covariateNames, response = RESPONSE, lineIDname = LINE_ID_NAME, test_index = cv_index)
+  
+  # get training and testing sets
+  train_df = standardized_list$train.df %>%
+    mutate(!!TIME_ID_NAME := factor( !!sym(TIME_ID_NAME) ),
+           !!LINE_ID_NAME := factor( !!sym(LINE_ID_NAME) )) %>%
+    arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+  
+  test_df = standardized_list$test.df %>%
+    mutate(!!TIME_ID_NAME := factor(!!sym(TIME_ID_NAME)),
+           !!LINE_ID_NAME := factor(!!sym(LINE_ID_NAME))) %>%
+    arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+  
+  # get group sizes
+  timeGroup_ids = train_df %>%
+    dplyr::select(!!sym(TIMEGROUP_ID_NAME), !!sym(TIME_ID_NAME)) %>%
+    unique()
+  group_sizes = table(timeGroup_ids[[TIMEGROUP_ID_NAME]])
+  
+  # get which date groups are in the testing set
+  test_df = test_df %>%
+    mutate(!!TIMEGROUP_ID_NAME := factor(!!sym(TIMEGROUP_ID_NAME), levels = names(group_sizes) ) )
+  
+  # (sparse) design matrix for model, set contrasts
+  X_train = sparse.model.matrix(modelFormula,
+                                train_df,
+                                contrasts = setNames(
+                                  list(contr_groupSum(group_sizes), contr.sum),
+                                  c(TIME_ID_NAME, LINE_ID_NAME)
+                                )
+  )  
+  # responses
+  Y_train = train_df[[RESPONSE]]
+  
+  # get every date in each group used to fit the model, this excludes the last date in each group (which should be sum2zero encoded)
+  timeFE_columns = levels(train_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
+  # append the group ID to the end of these columns
+  timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
+  # rename columns of design matrix
+  colnames(X_train)[1:sum(group_sizes)] = c("(Intercept)",
+                                            if (length(group_sizes) > 1) {
+                                              str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1))
+                                            } else { NULL },
+                                            timeFE_columns)
+  
+  print("finished making training set")
+  
+  # fit the linear model on the train data
+  fit_train_lm = sparseLM(X_train, Y_train, PRINT_TIME = F)
+  
+  if ( is.null(fit_train_lm) ) {
+    cat("cv failed, singular XtX\n")
+    return()
+  }
+  
+  print("finished fitting model")
+  
+  # (sparse) design matrix for model, without date
+  X_test = sparse.model.matrix(
+    update(modelFormula, as.formula(paste("~", TIMEGROUP_ID_NAME, "+ . - ",TIME_ID_NAME))),
+    test_df,
+    contrasts = setNames(list(contr.sum, contr.sum), c(TIMEGROUP_ID_NAME, LINE_ID_NAME)))  
+  # responses
+  Y_test = test_df[[RESPONSE]]
+  
+  # get rid of model coefficients associated with date terms (alpha)
+  model_coefs_nodate = fit_train_lm$beta_hat[  !grepl("^\\d{4}-\\d{2}-\\d{2}", rownames(fit_train_lm$beta_hat)), ]
+  
+  # make sure our design matrix and coefficients are the same
+  if (!all( names(model_coefs_nodate) == colnames( X_test ) )) {
+    cat("error in conforming matrices\n")
+    return()
+  }
+  
+  # create a column for predicted rvs
+  test_df[["pred_rv"]] = (X_test %*% model_coefs_nodate)[,1] 
+  
+  # create a column for predicted rvs, subtracting mean RV intercept term (mu)
+  #test_df[["pred_rv"]] = (X_test %*% model_coefs_nodate)[,1] - model_coefs_nodate[1]
+  
+  # store data
+  saveRDS(
+    list(testDF = test_df %>%
+           rename(contam_rv = !!sym(RESPONSE) ) %>%
+           select(!!sym(TIME_ID_NAME), !!sym(LINE_ID_NAME), contam_rv, pred_rv),
+         model_coefs = model_coefs_nodate),
+    file = str_c(WD_DATA, "models/", MODEL_NAME, "/cv/cv_df_", test_day, ".rds" ) 
+  )
+  
+}
+```
+
+```{r}
+cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel, mc.cores = 8)
+#cv_df = do.call(rbind, cv_list)
+rm(cv_list)
+```
+
+*CV with LASSO*
+
+```{r}
+lasso_zero_columns = model_fit$lasso_zero_columns
+```
+
+```{r}
+cv_parallel_LASSO = function(i) {
+  # get the test set and which day we evaluate on
+  test_set = i$test_set
+  test_day = i$test_day
+  
+  # test index if we leave out a given day/several timeIDs
+  cv_index = ( df[[TIME_ID_NAME]] %in% test_set )  
+  
+  # get standardized rv dataframe, seperate into train and test datasets
+  standardized_list = standardize(df, covariates = covariateNames, response = RESPONSE, lineIDname = LINE_ID_NAME, test_index = cv_index)
+  
+  # get training and testing sets
+  train_df = standardized_list$train.df %>%
+    mutate(!!TIME_ID_NAME := factor( !!sym(TIME_ID_NAME) ),
+           !!LINE_ID_NAME := factor( !!sym(LINE_ID_NAME) )) %>%
+    arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+  
+  test_df = standardized_list$test.df %>%
+    mutate(!!TIME_ID_NAME := factor(!!sym(TIME_ID_NAME)),
+           !!LINE_ID_NAME := factor(!!sym(LINE_ID_NAME))) %>%
+    arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+  
+  # get group sizes
+  timeGroup_ids = train_df %>%
+    dplyr::select(!!sym(TIMEGROUP_ID_NAME), !!sym(TIME_ID_NAME)) %>%
+    unique()
+  group_sizes = table(timeGroup_ids[[TIMEGROUP_ID_NAME]])
+  
+  # get which date groups are in the testing set
+  test_df = test_df %>%
+    mutate(!!TIMEGROUP_ID_NAME := factor(!!sym(TIMEGROUP_ID_NAME), levels = names(group_sizes) ) )
+  
+  # (sparse) design matrix for model, set contrasts
+  X_train = sparse.model.matrix(modelFormula,
+                                train_df,
+                                contrasts = setNames(
+                                  list(contr_groupSum(group_sizes), contr.sum),
+                                  c(TIME_ID_NAME, LINE_ID_NAME)
+                                )
+  )
+  
+  
+  # LASSO: remove zero columns from the design matrix
+  X_train = X_train[,setdiff(colnames(X_train),lasso_zero_columns)]
+
+  # responses
+  Y_train = train_df[[RESPONSE]]
+  
+  # get every date in each group used to fit the model, this excludes the last date in each group (which should be sum2zero encoded)
+  timeFE_columns = levels(train_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
+  # append the group ID to the end of these columns
+  timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
+  # rename columns of design matrix
+  colnames(X_train)[1:sum(group_sizes)] = c("(Intercept)",
+                                            if (length(group_sizes) > 1) {
+                                              str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1))
+                                            } else { NULL },
+                                            timeFE_columns)
+  
+  print("finished making training set")
+  
+  # fit the linear model on the train data
+  fit_train_lm = sparseLM(X_train, Y_train, PRINT_TIME = F)
+  
+  if ( is.null(fit_train_lm) ) {
+    cat("cv failed, singular XtX\n")
+    return()
+  }
+  
+  print("finished fitting model")
+  
+  # (sparse) design matrix for model, without date
+  X_test = sparse.model.matrix(
+    update(modelFormula, as.formula(paste("~", TIMEGROUP_ID_NAME, "+ . - ",TIME_ID_NAME))),
+    test_df,
+    contrasts = setNames(list(contr.sum, contr.sum), c(TIMEGROUP_ID_NAME, LINE_ID_NAME)))  
+  # responses
+  Y_test = test_df[[RESPONSE]]
+  
+  # LASSO: remove zero columns from the design matrix
+  X_test = X_test[,setdiff(colnames(X_test),lasso_zero_columns)]
+  
+  # get rid of model coefficients associated with date terms (alpha)
+  model_coefs_nodate = fit_train_lm$beta_hat[  !grepl("^\\d{4}-\\d{2}-\\d{2}", rownames(fit_train_lm$beta_hat)), ]
+  
+  # make sure our design matrix and coefficients are the same
+  if (!all( names(model_coefs_nodate) == colnames( X_test ) )) {
+    cat("error in conforming matrices\n")
+    return()
+  }
+  
+  # create a column for predicted rvs
+  test_df[["pred_rv"]] = (X_test %*% model_coefs_nodate)[,1] 
+  
+  # create a column for predicted rvs, subtracting mean RV intercept term (mu)
+  #test_df[["pred_rv"]] = (X_test %*% model_coefs_nodate)[,1] - model_coefs_nodate[1]
+  
+  # store data
+  saveRDS(
+    list(testDF = test_df %>%
+           rename(contam_rv = !!sym(RESPONSE) ) %>%
+           select(!!sym(TIME_ID_NAME), !!sym(LINE_ID_NAME), contam_rv, pred_rv),
+         model_coefs = model_coefs_nodate),
+    file = str_c(WD_DATA, "models/", MODEL_NAME, "/cv/cv_df_", test_day, ".rds" ) 
+  )
+  
+}
+```
+
+```{r}
+cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel_LASSO, mc.cores = 7)
+#cv_df = do.call(rbind, cv_list)
+rm(cv_list)
+```
+
+# LASSO feature selection
+
+inputs (and group_sizes)
+```{r}
+library(glmnet)
+X = designMat
+y = responses
+```
+
+```{r}
+# set the penalty factors
+penalty_factors = rep(1, ncol(X[,-1]))
+# determine number of parameters to not penalize (intercept, time FE, line FE)
+non_penalized = T_ + L_ - 2
+# set the non-penalized columns
+penalty_factors[1:non_penalized] = 0
+# check to make sure correct columns are/arent penalized!
+head(colnames(X[,-1])[1:non_penalized])
+tail(colnames(X[,-1])[1:non_penalized], 13)
+```
+
+```{r}
+# initialize runs, lambdas, number of zero columns, AIC, BIC, and RMSE
+num_runs = 140
+lambdas = seq(0, 0.0002, length.out = num_runs)
+numZeroCols = rep(NA,num_runs)
+AICs = rep(NA,num_runs)
+BICs = rep(NA,num_runs)
+RMSEs = rep(NA,num_runs)
+RSEs = rep(NA,num_runs)
+```
+
+```{r}
+for (i in 1:length(lambdas)) {
+  # set a lambda for our regularizer
+  lam = lambdas[i]
+  # get coefs from a LASSO
+  lasso_coef = coef( glmnet(X[,-1], y, alpha = 1, lambda = lam, penalty.factor = penalty_factors) )
+  # get coefs that are exactly 0 in LASSO
+  zero_columns = rownames(lasso_coef)[(lasso_coef == 0)[,1]]
+  
+  # store number of zero columns
+  numZeroCols[i] = length(zero_columns)
+  
+  # remove those columns from the design matrix
+  designMat_LASSO = X[,setdiff(colnames(X),zero_columns)]
+  # fit the linear model using all data
+  fit_lm = sparseLM(designMat_LASSO, y)
+  # initialize 0's in the linear operator
+  linear_op_mat = matrix(data = 0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]) )
+  # matrix for estimating the cleaned RV
+  linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+  # dataframe of date's cleaned rv
+  cleanRV_df = data.frame(
+    date = as.Date(timeIDs)
+  )
+  # find the mle estimate, var, and se for the intercept plus alpha
+  cleanRV_df$estimate = linear_op_mat %*% fit_lm$beta_hat[,1]
+  
+  # store results
+  AICs[i] = fit_lm$AIC
+  BICs[i] = fit_lm$BIC
+  RMSEs[i] = sqrt( mean(( cleanRV_df$estimate )^2) )
+  RSEs[i] = fit_lm$RSE
+}
 ```
 
 
 ```{r}
-# convert categorical vars to factors
-model.df = tibble( read.csv(str_c(wd_data,"neid_solar/", "final_fits_6kmps.csv") ) ) %>%
-  rename( wavelength = lambda ) %>%
-  mutate( obs_date = factor(obs_date),
-          lambda = factor(wavelength),
-          order_idx = factor(order_idx),
-          lam_order = factor( lam_order )
-        )
+saveRDS(list(lambdas = lambdas,
+             numZeroCols = numZeroCols,
+             AICs = AICs,
+             BICs = BICs,
+             RMSEs = RMSEs,
+             RSEs = RSEs),
+        file = str_c(model_dir, "/LASSO_results.rds") )
 ```
 
 ```{r}
-# join final fits and species
-model.df = model.df %>%
-  left_join(species.df, by = "lambda")
-```
-
-```{r}
-rm(species.df)
-```
-
-```{r}
-head(model.df)
-```
-
-```{r}
-# list of lambdas in model.df
-final_lams = ( model.df %>% group_by(lambda) %>% summarize(n. = n()) )$lambda
-length(final_lams)
-```
-```{r}
-# list of lambda-orders in model.df
-final_lams_orders = ( model.df %>% group_by(lam_order) %>% summarize(n. = n()) )$lam_order
-length(final_lams_orders)
-```
-
-```{r}
-# list of lambda-orders in model.df
-final_days = ( model.df %>% group_by(obs_date) %>% summarize(n. = n()) )$obs_date
-length(final_days)
-```
-
-# Data summaries
-
-```{r}
-# check how many line-order pairs there are
-model.df %>%
-  group_by(lambda, order_idx) %>%
-  count()
-```
-there are 310 line-order pairs, 146 observations per line-order pair
-
-# PCA
-
-## odd pca
-
-```{r}
-odd_gh = model.df[ str_c( "hg_", as.character( seq(1,12,2) ), "_scale" ) ]
-odd_gh
-```
-
-```{r}
-model.df %>%
-  filter(wavelength < 8600) %>%
-  ggplot(mapping = aes(x = hg_3_center, y =rv_center, color = wavelength)) +
-  geom_point(alpha = .4)
-```
-
-```{r}
-model.df %>%
-  ggplot(mapping = aes(x = hg_1_center, y = hg_3_center, color = wavelength)) +
-  geom_point(alpha = .4)
-```
-
-```{r}
-pairs(odd_gh)
-```
-
-```{r}
-pcaOdd = prcomp(odd_gh, center = T, scale = T, retx = T)
-```
-
-```{r}
-#calculate total variance explained by each principal component
-var_explained = pcaOdd$sdev^2 / sum(pcaOdd$sdev^2)
-var_explained
-```
-```{r}
-# first 3 pcs
-100*sum(var_explained[1:3])
-```
-
-```{r}
-ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
-  geom_line() +
-  geom_point() +
-  xlab("Principal Component") + 
-  ylab("Variance Explained")
-```
-
-
-```{r}
-rm(odd_gh,var_explained)
-```
-
-## even pca
-
-```{r}
-even_gh = model.df[ str_c( "hg_", as.character( seq(0,12,2) ), "_scale" ) ]
-even_gh
-```
-
-```{r}
-pairs(even_gh)
-```
-
-```{r}
-pcaEven = prcomp(even_gh, center =T, scale =T, retx = T)
-```
-
-```{r}
-#calculate total variance explained by each principal component
-var_explained = pcaEven$sdev^2 / sum(pcaEven$sdev^2)
-var_explained
-```
-
-```{r}
-# first 3 pcs
-100*sum(var_explained[1:3])
-```
-
-```{r}
-ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
-  geom_line() +
-  geom_point() +
-  xlab("Principal Component") + 
-  ylab("Variance Explained")
-```
-
-```{r}
-rm(even_gh,var_explained)
-```
-
-## add pcs to dataframes
-
-```{r}
-# get pcs from each model
-oddPCs = pcaOdd$x
-evenPCs = pcaEven$x
-```
-
-```{r}
-# modify column names
-colnames(oddPCs) = str_c( "odd_", colnames(oddPCs) )
-colnames(evenPCs) = str_c( "even_", colnames(evenPCs) )
-```
-
-```{r}
-# add columns to our dataframes
-model.df = cbind(model.df, oddPCs, evenPCs)
-```
-
-```{r}
-rm(evenPCs, oddPCs, pcaEven, pcaOdd)
-```
-
-```{r}
-model.df[ str_c( "odd_PC", as.character( seq(1,6) ) ) ] %>% pairs()
-```
-
-```{r}
-model.df[ str_c( "even_PC", as.character( seq(1,6) ) ) ] %>% pairs()
-```
-
-# linear models
-
-## model weighted 
-
-```{r}
-# add median snr for every line-order into the scaled dataframe
-scaledmodel.df = scaledmodel.df %>%
-  group_by(lam_order) %>%
-  mutate( med_snr = median(snr) ) %>%
-  ungroup()
-```
-
-```{r}
-lm0 = lm(rv_center ~ lam_order*b1_center + obs_date , model.df)
-```
-
-
-
-```{r}
-lm0 = lm(centered_rv ~ lam_order + obs_date , scaledmodel.df, weights = snr)
-```
-
-```{r}
-lm0 = lm(centered_rv ~ lam_order + obs_date , scaledmodel.df, weights = med_snr)
-```
-
-```{r}
-lm0 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data=scaledmodel.df ) 
-```
-
-```{r}
-lm0 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data=scaledmodel.df, weights = med_snr ) 
-```
-
-```{r}
-lm0 = lm(centered_rv ~ lam_order + obs_date + b1 + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data=scaledmodel.df, weights = snr ) 
-```
-
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm0
-# dataframe of coefficients of currentlm 
-coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-                  estimate = summary(currentlm )$coefficients[,1],
-                  se = summary(currentlm )$coefficients[,2],
-                  pval = summary(currentlm )$coefficients[,4] )
-```
-
-```{r}
-coef.df
-```
-
-```{r}
-coef.df
-```
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
-```
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_histogram(mapping = aes(emmean))
-```
-
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
-  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
-  geom_hline(yintercept = 0, color = "red")
-```
-```{r}
-sd(emmean.summary$emmean)
+lasso_results = readRDS(str_c(model_dir, "/LASSO_results.rds"))
+lasso_results
 ```
 
 ```{r}
 ggplot() +
-  geom_density(mapping = aes(x = currentlm$residuals))
-
-summary(currentlm$residuals)
+  geom_line(mapping = aes(x = 100*lasso_results$numZeroCols/(L_*14), lasso_results$AICs)) +
+  xlab("percent of columns removed") +
+  ylab("AIC") +
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$AICs)]/(L_*14),
+             linetype = 2) +
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$RSEs)]/(L_*14),
+             linetype = 2, color = "red")
+ggplot() +
+  geom_line(mapping = aes(x = 100*lasso_results$numZeroCols/(L_*14), lasso_results$BICs)) +
+  xlab("percent of columns removed") +
+  ylab("BIC") +
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$AICs)]/(L_*14),
+             linetype = 2)+
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$RSEs)]/(L_*14),
+             linetype = 2, color = "red")
+ggplot() +
+  geom_line(mapping = aes(x = 100*lasso_results$numZeroCols/(L_*14), lasso_results$RMSEs)) +
+  xlab("percent of columns removed") +
+  ylab("RMSE") +
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$AICs)]/(L_*14),
+             linetype = 2)+
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$RSEs)]/(L_*14),
+             linetype = 2, color = "red")
+ggplot() +
+  geom_line(mapping = aes(x = 100*lasso_results$numZeroCols/(L_*14), lasso_results$RSEs)) +
+  xlab("percent of columns removed") +
+  ylab("RSE") +
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$AICs)]/(L_*14),
+             linetype = 2)+
+  geom_vline(xintercept = 100*lasso_results$numZeroCols[which.min(lasso_results$RSEs)]/(L_*14),
+             linetype = 2, color = "red")
 ```
 
 ```{r}
-sqrt( sum(currentlm$residuals^2)/( nrow(scaledmodel.df)  - 45101 ) )
-```
-
-
-```{r}
-plot(currentlm,which=1)
-```
-
-```{r}
-plot(currentlm,which=2)
-```
-
-
-```{r}
-# R2 of model
-summary(currentlm)$adj.r.squared
-# rse of model
-summary(currentlm)$sigma
-# se on date emmean
-mean( emmean.summary$SE )
-# how many dates are statistically different than 0 (95% confidence)
-sum( !(emmean.summary$lower.CL <= 0 & emmean.summary$upper.CL >= 0) )
-```
-
-
-Response: centered rv
-
-  Model: lam_order + obs_date (no weight)
-    R^2 = 0.002085831
-    RSE = 12.09085
-    se on date emmean = 0.6867143
-    number of dates that are statistically different than 0 (95% CI) = 36
-    
-  Model: lam_order + obs_date (med snr^2 weight)
-    R^2 = 0.008960191
-    RSE = 1511107 ***
-    se on date emmean = 1.47265
-    number of dates that are statistically different than 0 (95% CI) = 5
-  
-  Model: lam_order + obs_date (snr^2 weight)
-    R^2 = 0.01162692
-    RSE = 1475669 ***
-    se on date emmean = 1.465805
-    number of dates that are statistically different than 0 (95% CI) = 5
-    
-  Model: full model (no weight)
-    R^2 = 0.8342954
-    RSE = 4.926944
-    se on date emmean = 0.2800749
-    number of dates that are statistically different than 0 (95% CI) = 11
-    
-  Model: full model (med snr^2 weight)
-    R^2 = 0.8073926
-    RSE = 666171.7 ***
-    se on date emmean = 0.6493029
-    number of dates that are statistically different than 0 (95% CI) = 0
-  
-  Model: full model (snr^2 weight)
-    R^2 = 0.8061024
-    RSE = 653604.1 ***
-    se on date emmean = 0.6493199
-    number of dates that are statistically different than 0 (95% CI) = 0
-  
-    
-
-```{r}
-rm(lm0, coef.df, currentlm, emmean.summary)
-```
-
-## model 0 (date dependence only)
-
-Response: centered_rv
-  
-  adj.r.squared: 0.008392062
-  RSE: 11.54451
-  standard error of date effect: 0.6556838
-  percent of days that aren't statistically different than 0 (normal, 95%): 0.7465753
-  percent of days that aren't statistically different than 0 (normal, 99%): 0.869863
-  
-Response: scale_rv
-  
-  adj.r.squared: 0.05831735
-  RSE: 0.967085
-  standard error of date effect: 0.05492674
-  percent of days that aren't statistically different than 0 (normal, 95%): 0.4178082
-  percent of days that aren't statistically different than 0 (normal, 99%): 0.5
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_center ~ obs_date + depth1_center + width1_center + a1_center + b1_center, model.df)
+# RMSE differences between no LASSO vs min AIC LASSO
+lasso_results$RMSEs[1]
+lasso_results$RMSEs[which.min(lasso_results$AICs)]
+# percent difference
+100*(lasso_results$RMSEs[which.min(lasso_results$AICs)] - lasso_results$RMSEs[1])/lasso_results$RMSEs[1]
+# how many columns are removed
+lasso_results$numZeroCols[which.min(lasso_results$AICs)]
+100*lasso_results$numZeroCols[which.min(lasso_results$AICs)]/(L_*14)
 ```
 
 ```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
+# which lambda minimized the AIC
+lasso_results$lambdas[which.min(lasso_results$AICs)]
+```
+
+*fitting a linear model with the LASSO chosen features*
+
+```{r}
+# set a lambda for our regularizer
+lam = lasso_results$lambdas[which.min(lasso_results$AICs)]
 ```
 
 ```{r}
-# dataframe of coefficients of currentlm 
-# coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-#                   estimate = summary(currentlm )$coefficients[,1],
-#                   se = summary(currentlm )$coefficients[,2],
-#                   pval = summary(currentlm )$coefficients[,4] )
+# get coefs from a LASSO
+lasso_coef = coef( glmnet(X[,-1], y, alpha = 1, lambda = lam, penalty.factor = penalty_factors) )
+# get coefs that are exactly 0 in LASSO
+zero_columns = rownames(lasso_coef)[(lasso_coef == 0)[,1]]
+# remove those columns from the design matrix
+designMat_LASSO = X[,setdiff(colnames(X),zero_columns)]
+# fit the linear model using all data
+fit_lm = sparseLM(designMat_LASSO, responses)
 ```
 
 ```{r}
-# adj.r.squared
-summary(currentlm)$adj.r.squared
-# RSE
-summary(currentlm)$sigma
-# standard error of date effect (mean)
-mean(emmean.summary$SE)
-# percent of days that aren't statistically different than 0 (95%)
-mean(
-  (emmean.summary$emmean - qnorm(.975)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(.975)*emmean.summary$SE > 0)
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+# covariance matrix of model parameters
+cov_mat = fit_lm$var_beta_hat
+
+# dataframe of date's cleaned rv
+cleanRV_df = data.frame(
+  timeID = as.Date(timeIDs)
 )
-# percent of days aren't statistically different than 0 (99%)
-mean(
-  (emmean.summary$emmean - qnorm(0.995)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(0.995)*emmean.summary$SE > 0)
-)
+# find the mle estiamte, var, and se for the intercept plus alpha
+cleanRV_df$estimate = (linear_op_mat %*% fit_lm$beta_hat[,1] )[,1]
+cleanRV_covar = linear_op_mat %*% cov_mat %*% t(linear_op_mat)
+cleanRV_df$var = diag( cleanRV_covar )
+cleanRV_df$se = sqrt(cleanRV_df$var)
+# find rmse of the clean RV
+RMSE = rmse_t(0,cleanRV_df$estimate)
+```
+
+```{r}
+saveRDS(list(designMat = designMat_LASSO,
+             responses = responses,
+             df = temp_df,
+             timeGroup_ids = timeGroup_ids,
+             modelFormula = modelFormula,
+             covariateNames = covariateNames,
+             fit_lm = fit_lm,
+             cleanRV_df = cleanRV_df,
+             RMSE = RMSE,
+             lasso_zero_columns = zero_columns),
+        file = str_c(model_dir, "/model_LASSO.rds" ) )
 ```
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
-  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
-  geom_hline(yintercept = 0, color = "red")
-```
-
-```{r}
-plot(currentlm,which=1)
-```
-
-```{r}
-plot(currentlm,which=2)
-```
-
-```{r}
-rm(currentlm, coef.df, emmean.summary)
-```
-
-## model 1 (chosen stepwise regression)
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_center ~ obs_date + hg_0_center + hg_2_center + hg_3_center + hg_4_center + hg_5_center + hg_6_center + hg_7_center + hg_8_center + hg_9_center + hg_10_center + hg_11_center + a1_center + depth1_center + width1_center + b1_center, data=model.df) 
-```
-
-removing some lines
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_center ~ obs_date + hg_0_center + hg_2_center + hg_3_center + hg_4_center + hg_5_center + hg_6_center + hg_7_center + hg_8_center + hg_9_center + hg_10_center + hg_11_center + a1_center + depth1_center + width1_center + b1_center, data=model.df %>% filter(wavelength > 8600)) 
-```
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
-```
-
-```{r}
-# dataframe of coefficients of currentlm 
-coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-                  estimate = summary(currentlm )$coefficients[,1],
-                  se = summary(currentlm )$coefficients[,2],
-                  pval = summary(currentlm )$coefficients[,4] )
-```
-
-```{r}
-# adj.r.squared
-summary(currentlm)$adj.r.squared
-# RSE
-summary(currentlm)$sigma
-# standard error of date effect (mean)
-mean(emmean.summary$SE)
-# percent of days that aren't statistically different than 0 (95%)
-mean(
-  (emmean.summary$emmean - qnorm(.975)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(.975)*emmean.summary$SE > 0)
-)
-# percent of days aren't statistically different than 0 (99%)
-mean(
-  (emmean.summary$emmean - qnorm(0.995)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(0.995)*emmean.summary$SE > 0)
-)
-```
-
-new model, centering shape measurements (no scaling on features):
-[1] 0.8297888
-[1] 4.78299
-[1] 0.271907
-[1] 0.9383562
-[1] 0.9863014
-
-new model, centering shape measurements (no scaling on features), removing wavelength > 8600 lines:
-[1] 0.9684441
-[1] 6.347473
-[1] 1.502136
-[1] 0.9520548
-[1] 0.9726027
-
-```{r}
-# add column of predicted rv to test dataframe
-#predict(currentlm)
-```
-
-```{r}
-model.df %>%
-  filter(wavelength > 8600) %>%
-  ggplot(mapping = aes(x = rv_center, y = predict(currentlm), color = snr)) +
-  geom_point() +
-  geom_abline(slope=1,intercept=0,linetype = 2)
-```
-
-```{r}
-emmean.summary
-```
-
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
-  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
-  geom_hline(yintercept = 0, color = "red")
-```
-
-```{r}
-plot(currentlm,which=1)
-```
-
-```{r}
-plot(currentlm,which=2)
-```
-
-
-```{r}
-rm(coef.df, currentlm, emmean.summary)
-```
-
-## model 2 (hg1 + obsdate alone)
-
-Response: centered_rv
-  
-  adj.r.squared: 0.1267902
-  RSE: 10.8334
-  standard error of date effect: 0.6154992
-  percent of days that aren't statistically different than 0 (normal, 95%): 0.8835616
-  percent of days that aren't statistically different than 0 (normal, 99%): 0.9863014
-  
-Response: scale_rv
-  
-  adj.r.squared: 0.5347835
-  RSE: 0.6797354
-  standard error of date effect: 0.03861915
-  percent of days that aren't statistically different than 0 (normal, 95%): 0.3356164
-  percent of days that aren't statistically different than 0 (normal, 99%): 0.4863014
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_scale ~ obs_date + hg_1_scale, model.df)
-```
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
-```
-
-```{r}
-# dataframe of coefficients of currentlm 
-# coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-#                   estimate = summary(currentlm )$coefficients[,1],
-#                   se = summary(currentlm )$coefficients[,2],
-#                   pval = summary(currentlm )$coefficients[,4] )
-```
-
-```{r}
-# adj.r.squared
-summary(currentlm)$adj.r.squared
-# RSE
-summary(currentlm)$sigma
-# standard error of date effect (mean)
-mean(emmean.summary$SE)
-# percent of days that aren't statistically different than 0 (95%)
-mean(
-  (emmean.summary$emmean - qnorm(.975)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(.975)*emmean.summary$SE > 0)
-)
-# percent of days aren't statistically different than 0 (99%)
-mean(
-  (emmean.summary$emmean - qnorm(0.995)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(0.995)*emmean.summary$SE > 0)
-)
-```
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
-  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
-  geom_hline(yintercept = 0, color = "red")
-```
-
-```{r}
-plot(currentlm,which=1)
-```
-
-```{r}
-plot(currentlm,which=2)
-```
-
-```{r}
-rm(currentlm, coef.df, emmean.summary)
-```
-
-## model 3 (two shape changes)
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_scale ~ obs_date + hg_1_scale, model.df)
-```
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
-```
-
-```{r}
-# dataframe of coefficients of currentlm 
-# coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-#                   estimate = summary(currentlm )$coefficients[,1],
-#                   se = summary(currentlm )$coefficients[,2],
-#                   pval = summary(currentlm )$coefficients[,4] )
-```
-
-```{r}
-# adj.r.squared
-summary(currentlm)$adj.r.squared
-# RSE
-summary(currentlm)$sigma
-# standard error of date effect (mean)
-mean(emmean.summary$SE)
-# percent of days that aren't statistically different than 0 (95%)
-mean(
-  (emmean.summary$emmean - qnorm(.975)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(.975)*emmean.summary$SE > 0)
-)
-# percent of days aren't statistically different than 0 (99%)
-mean(
-  (emmean.summary$emmean - qnorm(0.995)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(0.995)*emmean.summary$SE > 0)
-)
-```
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
-  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
-  geom_hline(yintercept = 0, color = "red")
-```
-
-
-## model for rv (PCs)
-
-Response: centered_rv
-  
-  adj.r.squared: 0.1267902
-  RSE: 10.8334
-  standard error of date effect: 0.6154992
-  percent of days that aren't statistically different than 0 (normal, 95%): 0.8835616
-  percent of days that aren't statistically different than 0 (normal, 99%): 0.9863014
-  
-Response: scale_rv
-  
-  adj.r.squared: 0.5863582
-  RSE: 0.6409506
-  standard error of date effect: 0.03645436
-  percent of days that aren't statistically different than 0 (normal, 95%): 0.869863
-  percent of days that aren't statistically different than 0 (normal, 99%): 0.9657534
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_scale ~ obs_date + odd_PC1 + odd_PC2 + odd_PC3 + even_PC1 + even_PC2 + even_PC3, model.df)
-```
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(currentlm, "obs_date", nuisance = "lam_order") )
-```
-
-```{r}
-# dataframe of coefficients of currentlm 
-# coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-#                   estimate = summary(currentlm )$coefficients[,1],
-#                   se = summary(currentlm )$coefficients[,2],
-#                   pval = summary(currentlm )$coefficients[,4] )
-```
-
-```{r}
-# adj.r.squared
-summary(currentlm)$adj.r.squared
-# RSE
-summary(currentlm)$sigma
-# standard error of date effect (mean)
-mean(emmean.summary$SE)
-# percent of days that aren't statistically different than 0 (95%)
-mean(
-  (emmean.summary$emmean - qnorm(.975)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(.975)*emmean.summary$SE > 0)
-)
-# percent of days aren't statistically different than 0 (99%)
-mean(
-  (emmean.summary$emmean - qnorm(0.995)*emmean.summary$SE < 0) & (emmean.summary$emmean + qnorm(0.995)*emmean.summary$SE > 0)
-)
-```
-
-```{r}
-emmean.summary %>%
-  ggplot() +
-  geom_point(aes(x = as.Date(obs_date), y = emmean), color = "black") +
-  geom_errorbar(aes(x = as.Date(obs_date), ymin = emmean - 1.96*SE, ymax = emmean + 1.96*SE), color = "black") +
-  geom_hline(yintercept = 0, color = "red")
-```
-
-```{r}
-plot(currentlm,which=1)
-```
-
-```{r}
-plot(currentlm,which=2)
-```
-
-```{r}
-rm(currentlm, emmean.summary)
-```
-
-## model for rv by hg1*line_order
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_center ~ 0 + hg_1_center + lam_order*hg_1_center, model.df %>% filter(wavelength < 8600, wavelength != 5175.169) )
-```
-
-```{r}
-# dataframe of coefficients of currentlm 
-coef.df = tibble( coef = rownames(summary(currentlm )$coefficients),
-                  estimate = summary(currentlm )$coefficients[,1],
-                  se = summary(currentlm )$coefficients[,2],
-                  pval = summary(currentlm )$coefficients[,4] )
-```
-
-```{r}
-coef.df
-```
-
-
-```{r}
-model.df %>%
-  filter(wavelength < 8600, wavelength != 5175.169) %>%
-  ggplot(mapping = aes(x = hg_1_center, y = rv_center)) +
-  geom_point()
-```
-
-## model with continuous time
-
-```{r}
-model.df = model.df %>% mutate(day = as.numeric(  as.Date(obs_date) ) )
-model.df
-```
-
-```{r}
-# the current linear model to be worked on
-currentlm = lm(rv_center ~ obs_date + I(obs_date^2) , model.df)
-```
-
-```{r}
-summary(currentlm)
-```
-
-
-# Variance inflation factor
-
-```{r, eval = F}
-# removing non-singularities from lm above
-vif.df = 
-  as_tibble( model.matrix(~ centered_rv + lambda*b1 + order_idx + obs_date + gh_3 + gh_2 + gh_5 + 
-    gh_7 + depth1 + gh_9 + a1 + snr + gh_11 + gh_4 + width1 + 
-    gh_0 + gh_10, data = scaledmodel.df) ) %>%
-  dplyr::select(!attributes(alias(lm3)$Complete)$dimnames[[1]]) %>%
-  dplyr::select(!"(Intercept)")
-
-# run lm on modified dataframe (that excluded non-singularities)
-vif.lm = lm(centered_rv ~ ., data = vif.df)
-
-# check if r2 and rmse are the same 
-summary(vif.lm)$adj.r.squared
-summary(vif.lm)$sigma
-
-vif.coefs = vif(vif.lm)
-
-# every single coefficient has vif of NaN...
-all( is.nan(vif.coefs) )
-
-rm(vif.df,vif.lm,vif.coefs)
-```
-
-*Strange results when removing non-singularities from og model (should be the exact same fit as that model). This occurs even when I remove the "problem" categorical variables like order_idx, and lambda b1 interaction.*
-
-Instead, remove all categorical (lambda, order_idx, obs_date):
-
-```{r}
-vif.lm = lm(centered_rv ~ b1 + gh_5 + depth1 + a1 + snr  + width1 + 
-    gh_0, data = scaledmodel.df)
- 
-t( t( vif(vif.lm) ) )
-```
-
-```{r}
-vif.lm = lm(centered_rv ~ lambda*b1 + order_idx + obs_date + gh_1 + gh_2 + gh_4 + gh_3 + gh_5 + depth1 + a1 + snr  + width1 + gh_0, data = scaledmodel.df)
-```
-
-```{r}
-summary(vif.lm)$adj.r.squared
-summary(vif.lm)$sigma
-```
-
-as expected, most gh coefficients are highly collinear whereas most other covariates are not collinear
-
-```{r}
-summary(scaledmodel.df)
-```
-
-```{r}
-rm(lm3, coef.df, vif.lm)
-```
-
-
-# injecting perturbations in RV
-
-### random noise
-
-```{r}
-pert.df = model.df %>%
-  group_by(obs_date) %>%
-  mutate(pert_val = rnorm(1, sd = 2)) %>%
-  ungroup() %>%
-  mutate(rv_pert = rv + pert_val,
-         centered_rv_pert = centered_rv + pert_val)
-```
-
-```{r}
-# graph of perturbation
-pert.df %>%
-  dplyr::select(obs_date, pert_val) %>%
-  unique() %>%
-  ggplot() +
-  geom_point(mapping = aes(x = as.Date(obs_date), y = pert_val))
-```
-
-
-```{r}
-lm.pert = lm(centered_rv_pert ~ lam_order + obs_date + b1, pert.df, weights = 1/snr^2 )
-# dataframe of coefficients
-coef.df = tibble( coef = rownames(summary(lm.pert)$coefficients),
-                  estimate = summary(lm.pert)$coefficients[,1],
-                  se = summary(lm.pert)$coefficients[,2],
-                  pval = summary(lm.pert)$coefficients[,4] )
-```
-
-```{r}
-coef.df %>% filter( startsWith( coef, "(Intercept)") )
-```
-
-```{r}
-coef.df %>% filter( startsWith( coef, "obs_date") )
-```
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(lm.pert, "obs_date", nuisance = "lam_order") )
-date.emmeans = emmean.summary$emmean
-date.se = emmean.summary$SE
-# get perturbed values by date
-date.perts = pert.df$pert_val %>% unique()
-```
-
-note that the standard errors of the model estimates and once we subtract out the first date
-
-```{r}
-sqrt( 2*date.se[1]^2 )
-```
-
-```{r}
-date.emmeans - date.emmeans[1]
-```
-
-```{r}
-# join the perturbed dataframe with the coefficients to compare our perturbed obsdate with 
-date.pert.table = full_join(
-  pert.df %>%
-    dplyr::select(obs_date, pert_val) %>%
-    unique() %>%
-    mutate(obs_date = as.Date(obs_date)),
-  coef.df %>%
-    filter( startsWith( coef, "obs_date") ) %>%
-    mutate(obs_date = as.Date(str_sub(coef, 9))),
-  by = "obs_date"
-  )
-date.pert.table$emmean = date.emmeans
-date.pert.table$emmeanSE = date.se
-```
-
-```{r}
-date.pert.table
-```
-
-
-```{r}
-date.pert.table %>%
-  ggplot() +
-  geom_point(aes(x = obs_date, y = emmean), color = "black") +
-  geom_errorbar(aes(x = obs_date, ymin = emmean - 1.96*emmeanSE, ymax = emmean + 1.96*emmeanSE), color = "black") +
-  geom_point(aes(x = obs_date, y = pert_val), color = "red") +
-  xlab("obs date")
-```
-
-```{r}
-date.pert.table %>%
-  mutate(diff = pert_val - emmean) %>%
-  ggplot() +
-  geom_point(aes(x = obs_date, y = diff), color = "black") +
-  xlab("obs date") +
-  ylab("difference between perturbed value and obs date estimate")
-```
-
-mean difference between perturbed value and obs date estimate
-```{r}
-date.pert.table %>%
-  mutate(diff = pert_val - emmean) %>%
-  summarize(mean_diff = mean(diff))
-```
-
-
-```{r}
-rm(lm.pert,pert.df,coef.df,date.emmeans,date.se,date.pert.table,emmean.summary, date.perts)
-```
-
-
-### random sinusodial noise
-
-
-```{r}
-# amplitude
-amp = 2
-# frequency
-freq = 1/30
-```
-
-
-```{r}
-# create perturbed df where each day is perturbed by a sinusodial wave
-# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
-# sin_date is 1 times the sin of date_num
-pert.df = model.df %>%
-  group_by(obs_date) %>%
-  mutate(date_num = as.numeric(as.Date(obs_date)),
-         pert_val = amp*sin(freq*date_num)) %>%
-  ungroup() %>%
-  mutate(rv_pert_center = rv_center + pert_val)
-pert.df
-```
-
-old:
-```{r}
-# create perturbed df where each day is perturbed by a sinusodial wave
-# date_num is the obsdate converted to a numerical and divided to decrease freq of perturbation
-# sin_date is 1 times the sin of date_num
-pert.df = model.df %>%
-  group_by(obs_date) %>%
-  mutate(date_num = as.numeric(as.Date(obs_date)),
-         pert_val = amp*sin(freq*date_num)) %>%
-  ungroup() %>%
-  mutate(rv_pert = rv + pert_val) %>%
-  dplyr::select(!c(rv_center, rv_scale)) %>%
-  # we ought to redo our centering and scaling after we add the perturbation
-  group_by(lam_order) %>%
-  mutate( rv_pert_center = rv_pert - mean(rv_pert),
-          rv_pert_scale = rv_pert_center/sd(rv_pert)) %>%
-  ungroup()
-pert.df
-```
-
-```{r}
-# graph of perturbation
-pert.df %>%
-  dplyr::select(date_num, pert_val) %>%
-  unique() %>%
-  ggplot() +
-  geom_function(fun = function(x) amp*sin(freq*x), color = "red" ) +
-  geom_point(mapping = aes(x = date_num, y = pert_val))
-```
-
-
-```{r}
-lm.pert = lm(rv_pert_center ~ obs_date + b1_center + a1_center + depth1_center + width1_center + hg_0_center + hg_2_center + hg_3_center + hg_4_center + hg_5_center + hg_7_center + hg_9_center, pert.df)
-# dataframe of coefficients
-coef.df.pert = tibble( coef = rownames(summary(lm.pert)$coefficients),
-                  estimate = summary(lm.pert)$coefficients[,1],
-                  se = summary(lm.pert)$coefficients[,2],
-                  pval = summary(lm.pert)$coefficients[,4] )
-```
-
-```{r}
-lm.pert = lm(rv_pert_center ~ obs_date + b1_scale, pert.df)
-# dataframe of coefficients
-coef.df.pert = tibble( coef = rownames(summary(lm.pert)$coefficients),
-                  estimate = summary(lm.pert)$coefficients[,1],
-                  se = summary(lm.pert)$coefficients[,2],
-                  pval = summary(lm.pert)$coefficients[,4] )
-```
-
-
-```{r}
-# get emmeans 
-emmean.summary = summary( emmeans(lm.pert, "obs_date", nuisance = "lam_order") )
-date.emmeans = emmean.summary$emmean
-date.se = emmean.summary$SE
-# get perturbed values by date
-date.perts = pert.df$pert_val %>% unique()
-```
-
-```{r}
-# join the perturbed dataframe with the coefficients to compare our perturbed obsdate with 
-date.pert.table = full_join(
-  pert.df %>%
-    dplyr::select(obs_date, pert_val) %>%
-    unique() %>%
-    mutate(obs_date = as.Date(obs_date)),
-  coef.df.pert %>%
-    filter( startsWith( coef, "obs_date") ) %>%
-    mutate(obs_date = as.Date(str_sub(coef, 9))),
-  by = "obs_date"
-  )
-date.pert.table$emmean = date.emmeans
-date.pert.table$emmeanSE = date.se
-```
-
-```{r}
-date.pert.table %>%
-  ggplot() +
-  geom_point(aes(x = obs_date, y = emmean), color = "black") +
-  geom_errorbar(aes(x = obs_date, ymin = emmean - 1.96*emmeanSE, ymax = emmean + 1.96*emmeanSE), color = "black") +
-  geom_point(aes(x = obs_date, y = pert_val), color = "red") +
-  geom_function(fun = function(x) amp*sin(freq*as.numeric(x)), color = "red" ) +
-  xlab("obs date")
-```
-
-```{r}
-date.pert.table %>%
-  mutate(diff = pert_val - emmean) %>%
-  ggplot() +
-  geom_point(aes(x = obs_date, y = diff), color = "black") +
-  xlab("obs date") +
-  ylab("difference between perturbed value and obs date estimate")
-```
-
-
-
-mean difference between perturbed value and obs date estimate
-```{r}
-date.pert.table %>%
-  mutate(diff = pert_val - emmean) %>%
-  summarize(mean_diff = mean(diff),
-            sd_dff = sd(diff),
-            median_diff = median(diff))
-```
-
-
-
-```{r}
-rm(lm.pert,pert.df,date.emmeans,date.se,date.pert.table,emmean.summary, date.perts,amp,freq,coef.df.pert)
-```
-
-
-# LASSO
-
-*LASSO: no interaction terms*
-
-```{r}
-# categorical variables
-cat.df = as_tibble( model.matrix(~ obs_date, data = model.df %>% drop_na() )  ) %>%
-  dplyr::select(!"(Intercept)")
-cat.df
-```
-
-```{r}
-# covariates not-including categorical variables
-covar.df = model.df %>%
-  dplyr::select(hg_0_scale,hg_2_scale,hg_3_scale,hg_4_scale,hg_5_scale,hg_6_scale,hg_7_scale,hg_8_scale,hg_9_scale,hg_10_scale,a1_scale,depth1_scale,width1_scale,b1_scale) %>%
-  drop_na()
-covar.df
-```
-
-```{r}
-# covariates not-including categorical variables
-covar.df = model.df %>%
-  dplyr::select(odd_PC1,odd_PC2,odd_PC3,odd_PC4,odd_PC5,odd_PC6,even_PC1,even_PC2,even_PC3,even_PC4,even_PC5,even_PC6,even_PC7,a1_scale,depth1_scale,width1_scale,b1_scale) %>%
-  drop_na()
-covar.df
-```
-
-```{r}
-# combine categorical and non-categorical variables into one matrix
-# non-categorical vars appear before categorical vars
-Xlasso = data.matrix( cbind(covar.df,cat.df) )
-dim(Xlasso)
-
-# number of covariates
-n.covar = dim(covar.df)[2]
-n.covar
-# number of categories
-n.cat = ncol(Xlasso) - n.covar
-n.cat
-```
-
-```{r}
-# cv lasso, penalty factor means we only have penalties on non-categorical vars
-cv_model1 = cv.glmnet(Xlasso, 
-                     model.df$rv_center,
-                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
-                     alpha = 1)
-```
-
-```{r}
-cv_model1$lambda.min
-cv_model1$lambda.1se
-plot(cv_model1)
-```
-
-```{r}
-# create the best model using the min lambda
-best.model1 = glmnet(Xlasso, 
-                     model.df$rv_center,
-                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
-                     alpha = 1,
-                     lambda = cv_model1$lambda.1se)
-```
-
-```{r}
-# look at coeficients of non-cat vars
-head( coef(best.model1), n.covar + 1 )
-```
-
-                     s0
-(Intercept)   0.2953072
-hg_0_scale    .        
-hg_2_scale   -0.6158702
-hg_3_scale    2.5972034
-hg_4_scale    .        
-hg_5_scale    .        
-hg_6_scale    .        
-hg_7_scale    .        
-hg_8_scale    .        
-hg_9_scale    0.1624563
-hg_10_scale   .        
-a1_scale      .        
-depth1_scale  .        
-width1_scale  .        
-b1_scale      2.4818761
-
-
-```{r}
-rm(best.model1,cat.df,covar.df,cv_model1,Xlasso,n.cat,n.covar)
-```
-
-*LASSO: with interaction terms b/w non-categorical variables*
-
-```{r}
-covar2.df = model.matrix( ~ 0 + .^2, data = covar.df)
-```
-
-
-```{r}
-# combine categorical and non-categorical variables into one matrix
-# non-categorical vars appear before categorical vars
-Xlasso = data.matrix( cbind(covar2.df,cat.df) )
-dim(Xlasso)
-
-# number of covariates
-n.covar = dim(covar2.df)[2]
-n.covar
-# number of categories
-n.cat = ncol(Xlasso) - n.covar
-n.cat
-```
-
-```{r}
-# cv lasso, penalty factor means we only have penalties on non-categorical vars
-cv_model = cv.glmnet(Xlasso, 
-                     centered_rv,
-                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
-                     alpha = 1)
-```
-
-
-```{r}
-cv_model$lambda.min
-plot(cv_model)
-```
-
-```{r}
-# create the best model using the min lambda
-best.model = glmnet(Xlasso, 
-                     centered_rv,
-                     penalty.factor = c( rep(1,n.covar), rep(0,n.cat)),
-                     alpha = 1,
-                     lambda = cv_model$lambda.min)
-```
-
-```{r}
-# look at coeficients of non-cat vars
-head( coef(best.model), n.covar + 1 )
-```
-
-# stepwise model
-
-
-```{r, eval = F}
-# record the current time beforechunk
-now = Sys.time()
-
-# modify the og dataframe to keep only the necessary variables
-df.step = scaledmodel.df %>%
-  dplyr::select(centered_rv, lam_order, obs_date, 
-                gh_0, gh_2, gh_3, gh_4, gh_5 , gh_6 , gh_7 , gh_8 , gh_9 , gh_10 , gh_11 , gh_12,
-                snr, a1, depth1, width1, b1, colnames(scaledmodel.df)[71:96]) %>% 
-  drop_na()
-
-# base or the starting modeling
-base.mdl = lm(centered_rv ~ lam_order + obs_date, data=df.step)
-# full model
-full.mdl = lm(centered_rv ~ lam_order + obs_date + ., data=df.step)
-
-# k=2 uses AIC, k=log(n) n = sample size uses BIC
-step.mdl = step(base.mdl, scope = list(lower = base.mdl, upper = full.mdl), direction = "both", k = 2)
-
-# calculate the time difference after a chunk
-res = difftime(Sys.time(), now, units = "secs")
-# return a character string to show the time
-paste("Time for this code chunk to run:", res)
-```
-
-
-```{r}
-rm(base.mdl, df.step, full.mdl, step.mdl, now, res)
-```
-
-
-
-```{r}
-
-```
-
-
 
 

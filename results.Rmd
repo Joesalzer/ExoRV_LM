@@ -1,0 +1,1059 @@
+---
+title: "NEID Solar Data -- Linear Modeling Results"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("readSpectra.R")
+library(Matrix)
+library(parallel)
+library(pbmcapply)
+#library(lme4)
+#library(car)
+#library(emmeans)
+#library(boot)
+# autocorrelation
+#library(collapse)
+#library(glmm)
+#library(MASS)
+#library(gridExtra)
+#library(glmnet)
+#library(plm)
+#library(sandwich)
+#library(lmtest)
+```
+
+```{r}
+# working directory with the data
+wd_data = "/Users/josephsalzer/research/exostat/"
+# RESPONSE variable
+RESPONSE = "rv_template_0.5"
+# names of the timeID, lineID, and timeGroupID
+TIME_ID_NAME = "date"
+LINE_ID_NAME = "line_order"
+TIMEGROUP_ID_NAME = "date_groups"
+```
+
+model name
+
+```{r}
+model_name = "Gauss=all_HG=all"
+```
+
+TWFE
+Gauss=all_HG=none
+Gauss=none_HG=all
+Gauss=all_HG=0,2,3,4,5,6,7,8,9
+Gauss=all_HG=0,2,4,6,8,10
+Gauss=all_HG=all
+Gauss=all_THG=all
+
+# fit results
+
+```{r}
+model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model.rds" ))
+
+# get the lm fit and dataframe
+designMat = model_fit$designMat
+responses = model_fit$responses
+rv_df = model_fit$df
+timeGroup_ids = model_fit$timeGroup_ids
+modelFormula = model_fit$modelFormula
+covariates = model_fit$covariates
+fit_lm = model_fit$fit_lm
+leverages = model_fit$leverages
+RMSE = model_fit$RMSE
+```
+
+```{r}
+# vec of LineIDs  in completeLines_df
+lineIDs = rv_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
+# vec of timeIDs in completeLines_df
+timeIDs = rv_df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME))
+T_ = length(timeIDs)
+L_ = length(lineIDs)
+```
+
+```{r}
+# dataframe of coefficients of current model
+coef_df = tibble( coef = rownames( fit_lm$beta_hat ),
+                  estimate = fit_lm$beta_hat[,1],
+                  se = sqrt( diag(fit_lm$var_beta_hat) ) )
+```
+
+```{r}
+# clean RV df with +- se
+cleanRV_df = model_fit$cleanRV_df %>%
+  mutate(lowerSE_MLE = estimate - se,
+         upperSE_MLE = estimate +se)
+```
+
+
+fitted rv and residual plot
+```{r}
+ggplot() +
+  geom_point(mapping = aes(x = fit_lm$y_hat[,1], y = fit_lm$resid[,1]), size = .15, alpha = .5) +
+  theme_minimal() +
+  labs(title = "fitted rv and residual plot",
+       x = "fitted rv",
+       y = "residuals") +
+  ylim(-100,100) +
+  xlim(-200,200)
+```
+
+
+QQ plot
+```{r}
+# QQ plot
+ggplot(data.frame(sample = fit_lm$resid[,1]), aes(sample = sample)) +
+  stat_qq(size = .5, alpha = .5) +
+  stat_qq_line() +
+  labs(title = "QQ Plot",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+```
+
+leverages
+```{r}
+ggplot() + geom_density(mapping = aes(x = leverages))
+summary(leverages)
+```
+
+autocorrelation for a single line
+```{r}
+lineID = 10
+acf(rv_df %>% mutate(residual = fit_lm$resid[,1]) %>% filter(line_order %in% lineIDs[lineID]) %>% pull(residual))
+rm(lineID)
+```
+
+correlation between lineIDs
+
+```{r}
+# lineID = sample(1:length(lineIDs), 2, replace = F)
+lineID = which(lineIDs %in% c("5347.28348_59","5502.99268_63"), arr.ind = T)
+
+rv_df %>%
+  mutate(residual = fit_lm$resid[,1]) %>%
+  filter(line_order %in% lineIDs[lineID]) %>%
+  select(line_order, date, residual) %>%
+  pivot_wider(id_cols = date, names_from = line_order, values_from = residual) %>%
+  rename(line1 = lineIDs[lineID[1]], line2 = lineIDs[lineID[2]] ) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line1, y = line2))
+rm(lineID)
+```
+correlation matrix between line's residuals
+
+```{r}
+# resid_cor_mat = rv_df %>%
+#   mutate(residual = fit_lm$resid[,1]) %>%
+#   select(line_order, date, residual) %>%
+#   pivot_wider(id_cols = date, names_from = line_order, values_from = residual) %>%
+#   select(!date) %>%
+#   cor()
+# 
+# # correlation threshold
+# threshold = 0.3
+# 
+# # find the column pairs with correlation higher than the threshold
+# high_corr_pairs = which(abs(resid_cor_mat) > threshold, arr.ind = TRUE)
+# # Filter out the diagonal and lower triangular values to avoid duplicate pairs
+# high_corr_pairs = high_corr_pairs[high_corr_pairs[, 1] < high_corr_pairs[, 2], ]
+# 
+# # Convert the results to a readable format
+# results = data.frame(
+#   Column1 = rownames(resid_cor_mat)[high_corr_pairs[, 1]],
+#   Column2 = colnames(resid_cor_mat)[high_corr_pairs[, 2]],
+#   Correlation = resid_cor_mat[high_corr_pairs]
+# )
+# 
+# # Print the results
+# print(results)
+```
+
+
+looking at the slope covariates of the lines, seeing if they are similar
+
+```{r}
+coef_df %>%
+  filter(endsWith(coef,"fit_gauss_depth_centered")) %>%
+  arrange(estimate)
+```
+```{r}
+rv_df %>%
+  filter(line_order=="4885.95763_48") %>%
+  ggplot(mapping = aes(x = as.Date(date), y = fit_gauss_depth)) +
+  geom_point()
+rv_df %>%
+  filter(line_order=="4885.95763_48") %>%
+  ggplot(mapping = aes(x = as.Date(date), y = rv_template_0.5)) +
+  geom_point()
+rv_df %>%
+  filter(line_order=="4885.95763_48") %>%
+  ggplot(mapping = aes(x = fit_gauss_depth, y = rv_template_0.5)) +
+  geom_point()
+```
+
+
+
+weights by variance of resids
+
+```{r}
+rv_df %>%
+  mutate(residual = fit_lm$resid[,1]) %>%
+  group_by(line_order) %>%
+  summarize( weight_byLine = mean(1/(sigma_rv_template_0.5)^2),
+             resid_sd = sd(residual)) %>%
+  mutate( weight_byLine = L_/sum(weight_byLine) * weight_byLine) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = weight_byLine, y = log(resid_sd) ))
+```
+
+rv effect plot
+
+```{r}
+ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
+  geom_point(mapping = aes(y = cleanRV_df$estimate), size = 1.2) +
+  #geom_errorbar(mapping = aes(ymin = cleanRV_df$lowerSE_MLE, ymax = cleanRV_df$upperSE_MLE), color = "black",linewidth = 1) +
+  geom_hline(yintercept = 0, color = "red") +
+  ylab("Cleaned RV") +
+  xlab("Date") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 20))
+```
+
+```{r}
+cat(model_name, "\n",
+    str_c("AIC: ", round(fit_lm$AIC/1e5,3), "e5" ), "\n",
+    str_c("BIC: ", round(fit_lm$BIC/1e5,3), "e5" ), "\n",
+    str_c("RSE: ", round(fit_lm$RSE,4), "\n" ),
+    str_c("Parameters: ", ncol(designMat), "\n"),
+    str_c("RMSE of cleaned RV to true planet: ", round(model_fit$RMSE,3) ), "\n",
+    str_c("mean se: ", round(mean( cleanRV_df$se ),3) ), "\n",
+    str_c("coverage 1se: ",
+          round(mean((cleanRV_df$estimate - cleanRV_df$se < 0) & (cleanRV_df$estimate + cleanRV_df$se > 0)),3),
+          "\n"),
+    str_c("coverage 2se: ",
+          round(mean((cleanRV_df$estimate - 2*cleanRV_df$se < 0) & (cleanRV_df$estimate + 2*cleanRV_df$se > 0)),3),
+          "\n"))
+```
+
+
+TWFE 
+ AIC: 17.061e5 
+ BIC: 17.039e5 
+ RSE: 27.674
+ Parameters: 1107
+ RMSE of cleaned RV to true planet: 1.919 
+ mean se: 0.989 
+ coverage 1se: 0.412
+ coverage 2se: 0.73
+Gauss=all_HG=all 
+ AIC: 9.938e5 
+ BIC: 9.698e5 
+ RSE: 6.7704
+ Parameters: 11999
+ RMSE of cleaned RV to true planet: 0.575 
+ mean se: 0.248 
+ coverage 1se: 0.348
+ coverage 2se: 0.618
+Gauss=all_HG=all_LASSO
+ AIC: 9.934e5 
+ BIC: 9.703e5 
+ RSE: 6.7709
+ Parameters: 11571
+ RMSE of cleaned RV to true planet: 0.581 
+ mean se: 0.247 
+ coverage 1se: 0.345
+ coverage 2se: 0.612
+
+Gauss=all_THG=all 
+ AIC: 9.938e5 
+ BIC: 9.698e5 
+ RSE: 6.7704
+ Parameters: 11999
+ RMSE of cleaned RV to true planet: 0.575 
+ mean se: 0.248 
+ coverage 1se: 0.348
+ coverage 2se: 0.618
+random_covars 
+ AIC: 17.197e5 
+ BIC: 16.957e5 
+ RSE: 27.8334
+ Parameters: 11999
+ RMSE of cleaned RV to true planet: 1.926 
+ mean se: 1.017 
+ coverage 1se: 0.412
+ coverage 2se: 0.742
+
+## HAC estimators
+
+```{r}
+model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model.rds" ))
+fit_lm = model_fit$fit_lm
+resid = fit_lm$resid[,1]
+X = model_fit$designMat
+y = model_fit$responses
+rv_df = model_fit$df
+cleanRV_df = model_fit$cleanRV_df
+
+# vec of LineIDs  in completeLines_df
+lineIDs = rv_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
+# vec of timeIDs in completeLines_df
+timeIDs = rv_df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME))
+T_ = length(timeIDs)
+L_ = length(lineIDs)
+
+# get group sizes
+group_sizes = table(model_fit$timeGroup_ids[[TIMEGROUP_ID_NAME]])
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+
+rm(model_fit)
+```
+
+kernel functions
+```{r}
+# compute a time kernel between two (possible date) objects
+compute_kernel_time <- function(t0, t1, type = "exponential", params = list(), tol = 1e-5) {
+  # convert to numeric if it is a date object
+  t0 = as.numeric(t0)
+  t1 = as.numeric(t1)
+  time_diff <- abs(t0 - t1)
+  
+  if (type == "exponential") {
+    # Exponential kernel
+    lambda <- params$lambda %||% 1
+    result = exp(-time_diff / lambda)
+    if (result < tol) {
+      return(0)
+    } else {
+      return(result)
+    }
+    
+  } else if (type == "matern") {
+    # Matern kernel
+    nu <- params$nu %||% 1.5
+    ell <- params$ell %||% 1
+    scaled_diff <- sqrt(2 * nu) * time_diff / ell
+    return((2^(1 - nu) / gamma(nu)) * scaled_diff^nu * besselK(scaled_diff, nu))
+    
+  } else if (type == "bartlett") {
+    # Bartlett kernel
+    L <- params$bandwidth %||% max(time_diff)
+    return(max(0, 1 - time_diff / L))
+    
+  } else {
+    stop("Unsupported kernel type.")
+  }
+}
+
+# # compute a kernel between rows of the unique ID
+# compute_kernel_CUSTOM = function(l0, l1, t0, t1, timeKernel = "exponential", lineKernel = "identity", params = list() ) {
+#   
+#   if (lineKernel == "identity") {
+#     if (l0 == l1) {
+#       return( compute_kernel_time(t0,t1,type=timeKernel,params = params) )
+#     } else {
+#       return(0)
+#     }
+#   } else if(lineKernel == "timeOnly") { 
+#     return( compute_kernel_time(t0,t1,type=timeKernel,params = params) )
+#   } else {
+#     stop("Unsupported kernel type.")
+#   }
+# }
+```
+
+create kernel matrix
+```{r}
+# time kernel matrix calculation
+K_time = Matrix(
+  outer(
+    as.Date(timeIDs),as.Date(timeIDs),
+    Vectorize(function(t0, t1) compute_kernel_time(t0, t1, type = "exponential", params = list(lambda = 28)))
+    )
+  )
+```
+
+```{r}
+# identity kernel
+K = kronecker(Diagonal(L_), K_time, make.dimnames = FALSE)
+```
+
+```{r}
+# cluster kernel
+
+# assign blocks for the bootstrap (by line's depth)
+# block_size = length(lineIDs)/20
+# clusterByLine = rv_df %>%
+#   group_by(line_order) %>%
+#   summarize(mean_depth = mean(fit_gauss_depth)) %>%
+#   arrange(mean_depth) %>%
+#   mutate(cluster = factor( ceiling(row_number() / block_size) ) ) %>%
+#   arrange(line_order)
+# head(clusterByLine)
+# rm(block_size)
+
+# assign blocks for the bootstrap (by line's order)
+clusterByLine = rv_df %>%
+  group_by(line_order) %>%
+  summarize(cluster = mean(order_idx) )
+head(clusterByLine)
+
+# create the adjacency matrix
+cluster_matrix = matrix(0, nrow = 778, ncol = 778)
+
+# loop through the lineIDs and assign 1 if they're in the same cluster
+for (i in 1:nrow(cluster_matrix)) {
+  for (j in 1:nrow(cluster_matrix)) {
+    if (clusterByLine$cluster[i] == clusterByLine$cluster[j]) {
+      cluster_matrix[i, j] = 1
+    }
+  }
+}
+cluster_matrix = Matrix(cluster_matrix)
+
+# cluster kernel
+K = kronecker( cluster_matrix, K_time, make.dimnames = FALSE )
+```
+
+estimate covariance and feasible least squares
+
+
+
+```{r}
+# residuals diagonal matrix
+E = resid*Diagonal(nrow(X))
+# calculate omega hat
+Omega_hat = K %*% E
+Omega_hat = E %*% Omega_hat
+# cholesky decomp of omega hat
+C = as(Matrix::Cholesky(Omega_hat), "Matrix")
+C_inv = solve(C)
+y_star = C_inv %*% y
+X_star = C_inv %*% X
+fit = sparseLM(X_star,y_star)
+```
+
+```{r}
+fit$AIC/1e5
+fit$BIC/1e5
+fit$RSE
+```
+
+```{r}
+resid_star = fit$resid
+# residuals diagonal matrix
+E = resid_star*Diagonal(nrow(X_star))
+# calculate omega hat
+Omega_hat = E %*% K %*% E
+# cholesky decomp of omega hat
+C = as(Matrix::Cholesky(Omega_hat), "Matrix")
+C_inv = solve(C)
+y_star = C_inv %*% y
+X_star = C_inv %*% X
+fit = sparseLM(X_star,y_star)
+```
+
+```{r}
+fit$AIC/1e5
+fit$BIC/1e5
+fit$RSE
+rmse_t(0,(linear_op_mat %*% fit$beta_hat[,1] )[,1])
+```
+
+
+```{r}
+ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
+  geom_point(mapping = aes(y = (linear_op_mat %*% fit$beta_hat[,1] )[,1]), size = 1.2) +
+  #geom_errorbar(mapping = aes(ymin = cleanRV_df$lowerSE_MLE, ymax = cleanRV_df$upperSE_MLE), color = "black",linewidth = 1) +
+  geom_hline(yintercept = 0, color = "red") +
+  ylab("Cleaned RV") +
+  xlab("Date") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 20))
+```
+
+
+
+
+calculate HAC covariance
+
+```{r}
+# residuals diagonal matrix
+E = resid*Diagonal(nrow(X))
+```
+
+```{r}
+# calculate omega hat
+Omega_hat = E %*% K %*% E
+```
+
+```{r}
+# get XtX_inv with the linear operator matrix applied
+XtX_inv = fit_lm$var_beta_hat/fit_lm$sigma2_hat
+XtX_inv = linear_op_mat %*% XtX_inv
+```
+
+```{r}
+HAC_covar = crossprod(X, Omega_hat)
+HAC_covar = HAC_covar %*% X
+HAC_covar = XtX_inv %*% HAC_covar
+HAC_covar = tcrossprod(HAC_covar,XtX_inv)
+```
+
+```{r}
+saveRDS(HAC_covar,str_c(wd_data, "models/", model_name, "/HAC_covar.rds" ))
+```
+
+*read in HAC covar*
+```{r}
+HAC_covar = readRDS(str_c(wd_data, "models/", model_name, "/HAC_covar.rds" ))
+```
+
+
+
+```{r}
+cleanRV_df = cleanRV_df %>%
+  mutate(hac_se = sqrt( diag(HAC_covar) ))
+```
+
+```{r}
+cleanRV_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = hac_se, y = estimate))
+cleanRV_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = se, y = estimate))
+cleanRV_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = se, y = hac_se))
+```
+
+
+
+
+## RMSE COMPARED TO AN INJECTED SIGNAL
+
+Finding the optimal RMSE for injected planetary signals to ensure consistent results across any injected planet. The cleaned RV RMSE estimates don't change as we include or remove planets
+
+```{r}
+true_rv_df = rv_df %>%
+  select(date,date_groups,pert_val) %>%
+  unique() %>%
+  mutate(alpha_hat = cleanRV_df$estimate) %>%
+  rename(true_rv = pert_val) %>%
+  group_by(date_groups) %>%
+  mutate(true_rv_offsetGroup = true_rv - mean(true_rv)) %>%
+  ungroup()
+true_rv_df
+# group offset
+true_rv_df %>%
+  group_by(date_groups) %>%
+  summarize(dateGroup_offset = mean(true_rv))
+```
+
+
+comparing our alpha hats to the (offset) true signal produces the same rmse as the model without a planet:
+```{r}
+rmse_t(c = 0, v = true_rv_df$alpha_hat - true_rv_df$true_rv_offsetGroup)
+```
+
+
+```{r}
+ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
+  geom_point(mapping = aes(y = cleanRV_df$estimate), size = .7) +
+  geom_errorbar(mapping = aes(ymin = cleanRV_df$lowerSE_MLE, ymax = cleanRV_df$upperSE_MLE), color = "black",linewidth = .1) +
+  geom_hline(yintercept = 0, color = "red") +
+  # with planet
+   #geom_line(mapping = aes(x = cleanRV_df$date[1] + seq(0,918), y = 0+5*sin( (2*pi/366)*seq(0,918) + 30)), color = "red") +
+  ylab("clean rv") +
+  xlab("day") #+ ylim(-6.1,6.1)
+```
+
+
+
+
+
+
+
+
+
+
+## figure of both TWFE and full model
+
+```{r}
+model_fit_TWFE = readRDS(str_c(wd_data, "models/", "TWFE", "/model.rds" ))
+model_fit_FULL = readRDS(str_c(wd_data, "models/", "Gauss=all_HG=all", "/model.rds" ))
+
+cleanRV_df = rbind(
+  model_fit_TWFE$cleanRV_df %>% mutate(model_name = "Baseline model"),
+  model_fit_FULL$cleanRV_df %>% mutate(model_name = "Full model")
+)
+
+rm(model_fit_TWFE,model_fit_FULL)
+
+```
+
+```{r}
+cleanRV_df %>%
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name)) +
+  geom_point(size = 1.5, alpha = .85) +
+  #geom_ribbon(aes(ymin = estimate-1, ymax = estimate+1), alpha = .3 ) +
+  geom_hline(yintercept = 0, color = "black") +
+  scale_color_manual(values=c("#ff7f00", "#377eb8")) +
+  guides(color=guide_legend(title="Model",override.aes = list(size=5))) +
+  ylab("Cleaned RV - True Signal (m/s)") +
+  xlab("Date") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 25), 
+        legend.title= element_blank(),
+        #legend.title= element_text(size = 15),
+        legend.text=element_text(size=25),
+        legend.position="bottom")
+
+#ggsave("visuals/cleanRV.png", width = 13.5, height = 9.5)
+```
+
+```{r}
+cleanRV_df %>%
+  bind_rows(tibble(timeID = rep(as.Date("2022-12-05"),2),
+                   estimate = NA,
+                   var=NA,
+                   se=NA,
+                   model_name = c("Baseline model","Full model"))) %>%
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name)) +
+  geom_line(linewidth = .8, alpha = .9) +
+  #geom_ribbon(aes(ymin = estimate-1, ymax = estimate+1), alpha = .3 ) +
+  geom_hline(yintercept = 0, color = "black") +
+  scale_color_manual(values=c("#ff7f00", "#377eb8")) +
+  guides(color=guide_legend(title="Model",override.aes = list(size=5))) +
+  ylab("Cleaned RV - True Signal (m/s)") +
+  xlab("Date") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 25), 
+        legend.title= element_blank(),
+        #legend.title= element_text(size = 15),
+        legend.text=element_text(size=25),
+        legend.position="bottom")
+```
+
+
+# bootstrap results
+
+```{r}
+bootName = "/wild_bootstrapsBLOCK=byLine"
+
+boot_files = list.files( str_c(wd_data, "models/", model_name, bootName) )
+coef_list = list()
+
+for ( i in 1:length(boot_files) ) {
+  coef_boot = readRDS( str_c(wd_data, "models/", model_name, bootName, "/", boot_files[i] ) )
+  coef_list[[i]] = coef_boot
+}
+
+# extract all vectors from boot_straps
+coef_boot_df = do.call( rbind, coef_list )
+
+rm(coef_boot, boot_files, coef_list, bootName)
+```
+
+```{r}
+# get group sizes
+group_sizes = table(model_fit$timeGroup_ids[[TIMEGROUP_ID_NAME]])
+
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+```
+
+```{r}
+# get the cleaned RV, after applying the linear operator to get the clean RV estimates for each day
+# each column is the estimate for each day and each row is a boot sample
+cleanRV_boot_df = coef_boot_df %*% t(linear_op_mat)
+```
+
+```{r}
+dim(coef_boot_df)
+dim(linear_op_mat)
+dim(cleanRV_boot_df)
+```
+
+```{r}
+coef_boot_df[1:5,1:5]
+cleanRV_boot_df[1:5,1:5]
+```
+
+```{r}
+# check for bias in original estimate vs bootstrap estimate
+id = 10
+
+ggplot() +
+  geom_histogram(mapping = aes(x = cleanRV_boot_df[,id]), bins = 40) +
+  geom_vline(xintercept = cleanRV_df$estimate[id] )
+
+rm(id)
+```
+
+```{r}
+# add the bootstrap se to the cleanRV_df
+cleanRV_df$boot_se = apply(cleanRV_boot_df, 2, sd)
+
+# ci based on se of sampling dist
+cleanRV_df = cleanRV_df %>%
+    mutate(lowerSE_boot = estimate - boot_se,
+           upperSE_boot = estimate + boot_se) 
+```
+
+```{r}
+# overall rmse for each boot sample
+rmse_boot = apply(cleanRV_boot_df, 1, rmse_t, c = 0)
+
+ggplot() +
+  geom_density(mapping = aes(x = rmse_boot)) +
+  geom_vline(xintercept = model_fit$RMSE, linetype = 2) +
+  xlab("RMSE")
+
+summary(rmse_boot)
+
+model_fit$RMSE
+quantile(rmse_boot, probs = c(.005,.995))
+```
+
+*coverage comparisons*
+
+```{r}
+cleanRV_df
+```
+
+```{r}
+cleanRV_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = timeID, y = boot_se), size = .8, color = "orange", alpha = .8) +
+  geom_hline(yintercept = mean(cleanRV_df$se), color = "black", linetype = 2) +
+  ylab("standard errors")
+
+cleanRV_df %>%
+  mutate(boot_se = ( boot_se -mean(boot_se) ) / sd(boot_se),
+         estimate = ( estimate -mean(estimate) ) /sd(estimate)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = timeID, y = boot_se), size = .8, color = "orange", alpha = .8) +
+  geom_point(mapping = aes(x = timeID, y = estimate), size = .8, color = "blue", alpha = .8) +
+  #geom_point(mapping = aes(x = date, y = se), size = .8, color = "blue", alpha = .8) +
+  #geom_hline(yintercept = mean(cleanRV_df$se), color = "black", linetype = 2) +
+  ylab("standard errors")
+```
+
+
+```{r}
+cat(model_name, "\n",
+    str_c("coverage 1se: ",
+          round(mean((cleanRV_df$estimate - cleanRV_df$boot_se < 0) & (cleanRV_df$estimate + cleanRV_df$boot_se > 0)),3),
+          "\n"),
+    str_c("coverage 2se: ",
+          round(mean((cleanRV_df$estimate - 2*cleanRV_df$boot_se < 0) & (cleanRV_df$estimate + 2*cleanRV_df$boot_se > 0)),3),
+          "\n"))
+```
+
+find how much we have to multiply the se by to get a certain coverage
+
+mle
+```{r}
+desired_coverage = .99
+mult = 1
+current_coverage = mean((cleanRV_df$estimate - mult*cleanRV_df$se < 0) & (cleanRV_df$estimate + mult*cleanRV_df$se > 0))
+
+while(current_coverage < desired_coverage) {
+  mult = mult+.001
+  current_coverage = mean((cleanRV_df$estimate - mult*cleanRV_df$se < 0) & (cleanRV_df$estimate + mult*cleanRV_df$se > 0))
+}
+
+print(mult)
+print(current_coverage)
+```
+
+```{r}
+# mean se
+mean(cleanRV_df$se)
+# CI length at desired level of coverage
+summary(2*mult*cleanRV_df$se)
+```
+
+```{r}
+rm(desired_coverage, mult, current_coverage)
+```
+
+boot
+```{r}
+desired_coverage = .99
+mult = 1
+current_coverage = mean((cleanRV_df$estimate - mult*cleanRV_df$boot_se < 0) & (cleanRV_df$estimate + mult*cleanRV_df$boot_se > 0))
+
+while(current_coverage < desired_coverage) {
+  mult = mult+.001
+  current_coverage = mean((cleanRV_df$estimate - mult*cleanRV_df$boot_se < 0) & (cleanRV_df$estimate + mult*cleanRV_df$boot_se > 0))
+}
+
+print(mult)
+print(current_coverage)
+```
+
+```{r}
+# mean se
+mean(cleanRV_df$boot_se)
+# mean CI length at desired level of coverage
+summary(2*mult*cleanRV_df$boot_se)
+```
+
+```{r}
+rm(desired_coverage, mult, current_coverage)
+```
+
+
+desired coverage: 68%
+  *MLE*
+  multiply se by: 2.328
+  
+  CI length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  1.141   1.147   1.149   1.151   1.153   1.186
+  
+  *Bootstrap*
+  multiple se by: 2.141
+  
+  CI length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ 0.7461  1.0185  1.1030  1.1535  1.2459  2.5096
+
+desired coverage: 95%
+  *MLE*
+  multiply se by: 4.344
+  
+  CI length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  2.132   2.143   2.147   2.152   2.155   2.217
+  
+  *Bootstrap*
+  multiple se by: 4.409
+  
+  CI length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  1.536   2.097   2.271   2.375   2.566   5.168
+  
+desired coverage: 99%
+  *MLE*
+  multiply se by: 6.501
+  
+  CI length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  3.190   3.207   3.213   3.220   3.224   3.318
+  
+  *Bootstrap*
+  multiple se by:  5.783
+  
+  CI length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  2.015   2.751   2.979   3.116   3.365   6.779
+
+
+quantile based coverage
+
+95% CI
+  Coverage = 63.3%
+  Length:
+     Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  0.6730  0.9215  1.0098  1.0464  1.1305  2.1014 
+  
+99% CI
+  Coverage = 75.5%
+  Length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  0.8954  1.1957  1.2968  1.3475  1.4507  2.6288
+  
+99.9% CI
+  Coverage = 83.6%
+  Length:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  1.115   1.459   1.585   1.655   1.814   3.182
+  
+
+  
+```{r}
+upperQuant = apply(cleanRV_boot_df, 2, function(x) quantile(x, probs = c(.9995)) )
+lowerQuant = apply(cleanRV_boot_df, 2, function(x) quantile(x, probs = c(.0005)) )
+
+100*mean( (upperQuant > 0) & (lowerQuant < 0) )
+```
+
+```{r}
+ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
+  geom_point(mapping = aes(y = cleanRV_df$estimate), size = .7) +
+  geom_errorbar(mapping = aes(ymin = lowerQuant, ymax = upperQuant), color = "black",linewidth = .1) +
+  geom_hline(yintercept = 0, color = "red") +
+  # with planet
+   #geom_line(mapping = aes(x = cleanRV_df$date[1] + seq(0,918), y = 0+5*sin( (2*pi/366)*seq(0,918) + 30)), color = "red") +
+  ylab("clean rv") +
+  xlab("day") #+ ylim(-6.1,6.1)
+```
+```{r}
+summary(upperQuant-lowerQuant)
+```
+
+# cross validation
+
+
+```{r}
+cvName = "/LOOMCV"
+
+# list of files
+cv_files = list.files( str_c(wd_data, "models/", model_name, cvName) )
+# empty list for creating data frame
+cv_list = list()
+
+for ( i in 1:length(cv_files) ) {
+  # day that we'll test on
+  test_day = str_sub(str_split_fixed(cv_files, "_",3)[i,3],end = -5)
+  # the entire test set df
+  testset_df = readRDS( str_c(wd_data, "models/", model_name, cvName, "/", cv_files[i] ) )$testDF
+  # grab the day from the test set and add to cv list
+  cv_list[[i]] = testset_df %>%
+    filter(date == test_day)
+  
+  rm(test_day,testset_df)
+}
+
+# combine dfs
+cv_df = do.call( rbind, cv_list ) %>% inner_join(timeGroup_ids, by = join_by(date)) 
+```
+
+```{r}
+rm(cv_files, cv_list, cvName)
+```
+
+```{r}
+rmse_decontam = rep(NA, length(timeIDs))
+rv_decontam = rep(NA, length(timeIDs))
+#rmse_decontam_0 = rep(NA, length(timeIDs))
+
+rmse_contam = rep(NA, length(timeIDs))
+rv_contam = rep(NA, length(timeIDs))
+#rmse_contam_0 = rep(NA, length(timeIDs))
+
+for (dayNum in 1:length(timeIDs)) {
+  
+  # decontaminated RV for a single day
+  decontamRV = cv_df %>%
+    filter(date %in% timeIDs[dayNum]) %>%
+    mutate(cleaned_rv = contam_rv - pred_rv) %>%
+    pull(cleaned_rv)
+  
+  decontam_optim = optimize(f = rmse_t, interval = c(-20, 20), v = decontamRV)
+  rmse_decontam[dayNum] = decontam_optim$objective
+  rv_decontam[dayNum] = decontam_optim$minimum
+  #rmse_decontam_0[dayNum] = rmse_t(c = 0, v = decontamRV)
+  rm(decontamRV,decontam_optim)
+  
+  # contaminated RV for a single day
+  contamRV = cv_df %>%
+    filter(date %in% timeIDs[dayNum]) %>%
+    pull(contam_rv)
+  
+  contam_optim = optimize(f = rmse_t, interval = c(-20, 20), v = contamRV)
+  rmse_contam[dayNum] = contam_optim$objective
+  rv_contam[dayNum] = contam_optim$minimum
+  #rmse_contam_0[dayNum] = rmse_t(c = 0, v = contamRV)
+  
+  rm(contamRV,contam_optim)
+}
+```
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(x = as.Date(timeIDs), y = rv_decontam), color = "blue", size = .7) +
+  geom_point(mapping = aes(x = as.Date(timeIDs), y = rv_contam), color = "orange", size = .7) +
+  theme_minimal()
+
+ggplot() +
+  geom_point(mapping = aes(x = as.Date(timeIDs), y = rmse_decontam), color = "blue", size = .7) +
+  geom_point(mapping = aes(x = as.Date(timeIDs), y = rmse_contam), color = "orange", size = .7) +
+  theme_minimal()
+
+ggplot() +
+  geom_point(mapping = aes(x = as.Date(timeIDs), y = rmse_decontam), color = "blue", size = .7) +
+  geom_point(mapping = aes(x = as.Date(timeIDs), y = rmse_contam), color = "orange", size = .7) +
+  scale_y_log10() +
+  theme_minimal()
+```
+
+*distributions of rmse_t*
+
+```{r}
+summary(rmse_contam)
+summary(rmse_decontam)
+```
+
+RMSE of individual days
+
+*contam RMSE*
+might have to adjust, this does not take into account BF/AF date split
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  8.696  18.666  23.859  25.713  28.192  93.090 
+
+*US_Gauss=all_HG=all*
+  LOODCV:
+  
+  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  4.614   6.050   6.650   6.881   7.382  14.067
+  
+  LOOWCV:
+  
+  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  4.744   6.157   6.773   7.070   7.549  14.394
+  
+  LOOMCV:
+  
+  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  5.221   6.551   7.170   7.481   7.934  15.511
+
+*overall rmse on C_t*
+
+```{r}
+optimize(f = rmse_t, interval = c(-15, 15), v = rv_contam)$objective
+optimize(f = rmse_t, interval = c(-15, 15), v = rv_decontam)$objective
+```
+
+```{r}
+# for data with a planet
+# rmse_t(c = 0, v = rv_decontam - true_rv_df$true_rv_offsetGroup)
+# 
+# optimize(f = rmse_t, interval = c(-15, 15), v = rv_decontam - true_rv_df$true_rv_offsetGroup)$objective
+```
+
+*contam RMSE*
+might have to adjust, this does not take into account BF/AF date split
+  3.192869
+
+*US_Gauss=all_HG=all*
+  full data: 0.575
+  LOODCV
+    0.5806542
+  LOOWCV
+    0.5948872
+  LOOMCV
+    0.611914
+    
+
+
+
