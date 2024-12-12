@@ -1,0 +1,202 @@
+---
+title: "NEID Solar Data -- PCA"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("/Users/josephsalzer/research/exostat/readSpectra.R")
+library(ggpubr)
+```
+
+```{r}
+## Data directory
+wd_data = "/Users/josephsalzer/research/exostat/"
+```
+
+# Loading/cleaning data
+
+```{r}
+# read data
+final_df = read_csv(str_c(wd_data,"completeLines.csv"))
+```
+
+```{r}
+colnames(final_df)
+```
+
+## get list of wavelengths, lineIDs, and days
+
+```{r}
+# vec of line-orders in final_df
+lines = ( final_df %>% group_by(line_order) %>% summarize(n. = n()) )$line_order
+# vec of days in final_df
+days = ( final_df %>% group_by(date) %>% summarize(n. = n()) )$date
+T_ = length(days)
+L_ = length(lines)
+```
+
+# PCA
+
+## PCA on RV data
+
+```{r}
+rv_df = final_df %>%
+  select(rv_template_0.5, date, line_order) %>%
+  pivot_wider(names_from = line_order, values_from = rv_template_0.5)
+head(rv_df)
+
+# rv matrix
+rv_mat = rv_df %>% select(!date)
+```
+
+*ADDING PLANERTARY SIGNAL IS LIKE ADDING A RANK 1 MATRIX TO OUR LINES*
+
+```{r}
+# planetary signal
+planet_signal = 5*sin( (2*pi/366)*changeFun( as.numeric(rv_df$date) ))
+# matrix to perturb the original dataframe by
+planet_mat = planet_signal %*% t(rep(1,L_))
+# stellar activity plus planet signal
+RVplanet_mat = rv_mat + planet_mat
+```
+
+*RUN PCA*
+
+```{r}
+# run pca with scaling
+rv_pca = prcomp(rv_mat, center = T, scale = T, retx = T)
+```
+
+*PCA diagnostics*
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = rv_pca$sdev^2 / sum(rv_pca$sdev^2)
+head(var_explained)
+```
+
+```{r}
+sum(var_explained[1:10])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  xlim(0,50)
+```
+
+## visuals
+
+*PC scores*
+```{r}
+# add pc scores to rv_df
+plot_df = cbind(rv_df, rv_pca$x[,1:6])
+pc1_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = PC1), size = .5)
+pc2_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = PC2), size = .5)
+pc3_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = PC3), size = .5)
+pc4_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = PC4), size = .5)
+pc5_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = PC5), size = .5)
+pc6_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = PC6), size = .5)
+
+p = ggarrange(plotlist = list(pc1_plot, pc2_plot,
+                              pc3_plot, pc4_plot,
+                              pc5_plot, pc6_plot), nrow = 3, ncol = 2)
+p
+ggsave("pcScorePlot.pdf", width = 10, height = 5)
+rm(plot_df,pc1_plot,pc2_plot,pc3_plot,pc4_plot,pc5_plot,pc6_plot)
+```
+
+*PC loadings*
+```{r}
+# dataframe of PC loadings (across lines)
+pcDir_df = data.frame(
+  line_order = names( rv_pca$rotation[,1] ),
+  PC1_dir = unname( rv_pca$rotation[,1] ),
+  PC2_dir = unname( rv_pca$rotation[,2] ),
+  PC3_dir = unname( rv_pca$rotation[,3] ),
+  PC4_dir = unname( rv_pca$rotation[,4] ),
+  PC5_dir = unname( rv_pca$rotation[,4] ),
+  PC6_dir = unname( rv_pca$rotation[,6] ),
+  wavelength = as.numeric(str_split_i(names( rv_pca$rotation[,1] ), "_",1))
+) %>%
+  arrange(wavelength)
+pcDir_df
+```
+
+
+```{r}
+pc1_plot = pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC1_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+pc2_plot = pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC2_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+pc3_plot = pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC3_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+pc4_plot = pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC4_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+pc5_plot = pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC5_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+pc6_plot = pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC6_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+p = ggarrange(plotlist = list(pc1_plot, pc2_plot,
+                              pc3_plot, pc4_plot,
+                              pc5_plot, pc6_plot), nrow = 3, ncol = 2)
+p
+ggsave("pcLoadingPlot.pdf", width = 10, height = 5)
+rm(pc1_plot,pc2_plot,pc3_plot,pc4_plot,pc5_plot,pc6_plot,p)
+```
+
+*low PC1 lines*
+```{r}
+pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC1_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+summary( abs(pcDir_df$PC1_dir) )
+quantile( abs(pcDir_df$PC1_dir), probs = c(.75,.95,.99) )
+```
+
+
+```{r}
+pcDir_df %>%
+  filter( abs(PC1_dir) < 0.04 ) %>%
+  pull(line_order) %>%
+  saveRDS(file = "lowPC1Lines.rds")
+```
+

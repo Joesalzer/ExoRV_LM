@@ -231,7 +231,6 @@ template_deriv_onto_gh = H5Fopen("project_template/project_template_deriv_onto_g
 template_deriv_onto_gh
 ```
 
-
 ```{r}
 # index of template_deriv_onto_gh that matches this file name
 template_deriv_onto_gh_ID = which(str_sub(lineProp_list[i], end = -8) == str_sub(template_deriv_onto_gh$filename, end = -4))
@@ -284,10 +283,25 @@ for every day at once:
 HG = ( temp_df %>% select(starts_with("hg")) %>% as.matrix() )
 ```
 
+
+```{r}
+(  )[1:3,1:6]
+```
+
 ```{r}
 # find orthogonal, "cleaned" gh coefficients
 # each element in the rows of the matrix rep(1,345) %*% t(d) are multiplied by the corresponding element of the vector G %*% d / sum(d*d)
 HG_perp = HG - sweep( x = rep(1,345) %*% t(d_gh), MARGIN = 1, STATS = HG %*% d_gh / sum(d_gh*d_gh), FUN = "*")
+HG_perp[1:3,1:6]
+```
+above is equivalent to
+```{r}
+dim(HG)
+length(d_gh)
+```
+
+```{r}
+HG_perp = HG - (HG %*% d_gh) %*% t(d_gh) / sum(d_gh * d_gh)
 HG_perp[1:3,1:6]
 ```
 

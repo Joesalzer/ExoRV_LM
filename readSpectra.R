@@ -181,7 +181,12 @@ standardize = function(current_df, covariates = NULL, test_index = NULL, respons
   
   # if no covariates are included, return original df
   if (is.null(covariates)) {
-    return( list(train.df = train) )
+    if (is.null( test_index )) {
+      return( list(train.df = train) )
+    } else {
+      return( list(train.df = train,
+                   test.df = test) )
+    }
   }
   
   ## this section normalizes train data by means and sd of train data ##
@@ -214,7 +219,7 @@ standardize = function(current_df, covariates = NULL, test_index = NULL, respons
                 train_means = train_means,
                 train_sds = train_sds))
   }
-  
+
   ## this section normalizes test data by means and sd of train data ##
   
   # merge the training shape measurement means by lineIDname
@@ -556,17 +561,17 @@ injectPlanet = function(df, amp = 1, freq = 2*pi/366, horizontal_offset = 0, ver
     ungroup() %>%
     # for every day calculate the amount to perturb a given line
     group_by(!!sym(timeIDname)) %>%
-    mutate(pert_val = vertical_offset + amp*sin(freq*time_num + horizontal_offset) ) %>%
+    mutate(planet_val = vertical_offset + amp*sin(freq*time_num + horizontal_offset) ) %>%
     ungroup() %>%
     # add perturbation to each line-day
-    mutate(pert_rv = !!sym(response) + pert_val) %>%
+    mutate(planet_rv = !!sym(response) + planet_val) %>%
     # include mean perturbed rv for each day
     group_by(!!sym(timeIDname)) %>%
-    mutate(pert_rv_time = mean(pert_rv)) %>%
+    mutate(planet_rv_time = mean(planet_rv)) %>%
     ungroup() %>%
     # include mean perturbed rv for each line
     group_by(!!sym(lineIDname)) %>%
-    mutate(pert_rv_line = mean(pert_rv)) %>%
+    mutate(planet_rv_line = mean(planet_rv)) %>%
     ungroup()
 }
 

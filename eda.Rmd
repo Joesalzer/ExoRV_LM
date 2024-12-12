@@ -7,9 +7,9 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(GGally)
 source("readSpectra.R")
 library(collapse)
+library(patchwork)
 ```
 
 # Loading/cleaning data
@@ -28,7 +28,7 @@ WD_DATA = "/Users/josephsalzer/research/exostat/"
 TIME_ID_NAME = "date"
 LINE_ID_NAME = "line_order"
 TIMEGROUP_ID_NAME = "date_groups"
-# csv file name
+# read in csv file
 completeLines_df = read_csv(str_c(WD_DATA,csvFileName)) %>%
   mutate(!!TIME_ID_NAME := as.Date( !!sym(TIME_ID_NAME) ))
 ```
@@ -40,7 +40,7 @@ colnames(completeLines_df)
 ## get list of wavelengths, lineIDs, and timeIDs
 
 ```{r}
-# vec of LineIDs  in completeLines_df
+# vec of lineIDs  in completeLines_df
 lineIDs = completeLines_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
 # vec of timeIDs in completeLines_df
 timeIDs = completeLines_df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME))
@@ -63,7 +63,220 @@ completeLines_df %>%
   arrange(!!sym(LINE_ID_NAME))
 ```
 
-# example absorption lines
+# rv and depth visuals for sample of lineIDs (visual in paper)
+*with a planet*
+
+```{r}
+selectLines = c("4732.02805_44","5408.26971_61","6244.82532_76", "8250.39009_100")
+```
+
+```{r}
+AMP = 3
+HORIZONTAL_OFFSET = 0
+VERTICAL_OFFSET = 0
+FREQ = 2*pi/365
+
+rv_df = ( injectPlanet(completeLines_df, amp = AMP, freq = FREQ, horizontal_offset = HORIZONTAL_OFFSET, vertical_offset = VERTICAL_OFFSET))
+  
+plot_df = rv_df %>%
+  filter(line_order %in% selectLines) %>%
+  group_by(line_order) %>%
+  mutate(mean_depth = mean(fit_gauss_depth),
+         change_depth = fit_gauss_depth - mean_depth ) %>%
+  ungroup() %>%
+  mutate(lineID = str_c("wavelength = ", round(lambdac_vald,3), "\nmean depth = ", round(mean_depth,3))) %>%
+  select(date, date_groups, lineID, planet_rv, fit_gauss_depth, change_depth)
+```
+
+```{r}
+seq_days = seq(min(unique(plot_df$date)), max(unique(plot_df$date)), by = 1)
+
+# planet df for the smooth curve
+planet_df = data.frame(days = seq_days,
+                       planet_rv = VERTICAL_OFFSET + AMP*sin(FREQ*changeFun(as.numeric(seq_days))+HORIZONTAL_OFFSET))
+
+
+rv_time_plt = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = planet_rv, color = date), size = .8, alpha = .87) +
+  geom_line(data = planet_df, mapping = aes(x = days, y = planet_rv), linetype = 1, linewidth = 1 ) +
+  xlab("Date") +
+  ylab("Radial velocity (m/s)") +
+  facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
+  theme_bw() + 
+  guides(color="none") +
+  scale_color_viridis_c() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 25),
+        strip.text.x = element_text(size = 20) )
+depth_time_plt = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = change_depth, color = date ), size = .8, alpha = .87) +
+  guides(color="none") +
+  xlab("Date") +
+  ylab("Change in depth") +
+  facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
+  theme_bw() +
+  theme(strip.text.x = element_blank(),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 25)) + 
+  guides(color="none") +
+  scale_color_viridis_c()
+rv_depth_plt = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = change_depth, y = planet_rv, color = date ), size = .8, alpha = .87) +
+  guides(color="none") +
+  xlab("Change in depth") +
+  ylab("Radial velocity (m/s)") +
+  facet_wrap(vars(lineID), nrow = 1, scales = "free") +
+  theme_bw() +
+  theme(strip.text.x = element_blank(),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 25))+ 
+  guides(color="none") +
+  scale_color_viridis_c()
+
+final_plot = rv_time_plt/depth_time_plt/rv_depth_plt
+
+# print the final arrangement
+print(final_plot)
+ggsave("visuals/fourLinesRV_planet.png", width = 13, height = 10)
+``` 
+
+```{r}
+rm(selectLines, plot_df, rv_time_plt, depth_time_plt, rv_depth_plt, final_plot)
+```
+
+*no planet*
+```{r}
+selectLines = c("4732.02805_44","5408.26971_61","6244.82532_76", "8250.39009_100")
+```
+
+```{r}
+plot_df = rv_df %>%
+  filter(line_order %in% selectLines) %>%
+  group_by(line_order) %>%
+  mutate(mean_depth = mean(fit_gauss_depth),
+         change_depth = fit_gauss_depth - mean_depth ) %>%
+  ungroup() %>%
+  mutate(lineID = str_c("wavelength = ", round(lambdac_vald,3), "\nmean depth = ", round(mean_depth,3))) %>%
+  select(date, date_groups, lineID, rv_template_0.5, fit_gauss_depth, change_depth)
+```
+
+```{r}
+rv_time_plt = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = rv_template_0.5, color = date), size = .8, alpha = .87) +
+  xlab("Date") +
+  ylab("Radial velocity (m/s)") +
+  facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
+  theme_bw() + 
+  guides(color="none") +
+  scale_color_viridis_c() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 25),
+        strip.text.x = element_text(size = 20) )
+depth_time_plt = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = change_depth, color = date ), size = .8, alpha = .87) +
+  guides(color="none") +
+  xlab("Date") +
+  ylab("Change in depth") +
+  facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
+  theme_bw() +
+  theme(strip.text.x = element_blank(),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 25)) + 
+  guides(color="none") +
+  scale_color_viridis_c()
+rv_depth_plt = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = change_depth, y = rv_template_0.5, color = date ), size = .8, alpha = .87) +
+  guides(color="none") +
+  xlab("Change in depth") +
+  ylab("Radial velocity (m/s)") +
+  facet_wrap(vars(lineID), nrow = 1, scales = "free") +
+  theme_bw() +
+  theme(strip.text.x = element_blank(),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 25))+ 
+  guides(color="none") +
+  scale_color_viridis_c()
+
+final_plot = rv_time_plt/depth_time_plt/rv_depth_plt
+
+# print the final arrangement
+print(final_plot)
+ggsave("visuals/fourLinesRV.png", width = 13, height = 10)
+``` 
+
+```{r}
+rm(selectLines, plot_df, rv_time_plt, depth_time_plt, rv_depth_plt, final_plot)
+```
+
+# heatmap, rv by date (visual in paper)
+
+```{r}
+# rv limit of plot
+rvLim = 40
+
+# data frame of the plot, get number of observations removed from plot
+plotDF = completeLines_df %>%
+  mutate(date = as.factor(date)) %>%
+  filter(abs(rv_template_0.5) < rvLim)
+cat(nrow(completeLines_df) - nrow(plotDF), "removed observations\n")
+cat( 100*(nrow(completeLines_df) - nrow(plotDF))/nrow(completeLines_df), "percent removed\n" )
+cat(L_, "total lineIDs\n")
+
+# non-adjusted rv plot
+allLinesHeat_plt = plotDF %>%
+  ggplot() +
+  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 90  ) +
+  geom_vline(xintercept = "2022-12-06", alpha = .5, linewidth=1) +
+  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,100)) +
+  labs(x = "",
+       y = "Raw RV (m/s)",
+       fill = "# of lines") +
+  ylim(-rvLim - 1, rvLim + 1) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title=element_text(size=20))
+
+# get a df of the adjusted RV (ie centered by the date group and lineID)
+plotDF_adjusted = completeLines_df %>%
+  group_by(date_groups, line_order) %>%
+  mutate(rv_template_0.5 = rv_template_0.5 - mean(rv_template_0.5)) %>%
+  ungroup() %>%
+  mutate(date = as.factor(date)) %>%
+  filter(abs(rv_template_0.5) < rvLim)
+cat(nrow(completeLines_df) - nrow(plotDF_adjusted), "removed observations\n")
+cat( 100*(nrow(completeLines_df) - nrow(plotDF_adjusted))/nrow(completeLines_df), "percent removed\n" )
+cat(L_, "total lineIDs\n")
+
+allLinesHeat_plt_adjusted = plotDF_adjusted %>%
+  ggplot() +
+  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 90  ) +
+  geom_vline(xintercept = "2022-12-06", alpha = .5, linewidth=1) +
+  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,100)) +
+  labs(x = "Chronologically-Ordered Days",
+       y = "Adjusted RV (m/s)",
+       fill = "# of lines") +
+  ylim(-rvLim - 1, rvLim + 1) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title=element_text(size=20))
+
+final_plot = (allLinesHeat_plt / allLinesHeat_plt_adjusted) + plot_layout(guides = 'collect') &
+  theme(legend.position='bottom', legend.title=element_text(size=15))
+print(final_plot)
+ggsave(filename = "visuals/heatmapRV_combined.png", width = 8, height = 7, units = "in")
+
+rm(allLinesHeat_plt, rvLim, plotDF, plotDF_adjusted,allLinesHeat_plt_adjusted,final_plot)
+```
+
+# visual of absorption lines
 
 ```{r}
 library(patchwork)
@@ -193,621 +406,27 @@ rm(AMP,HORIZONTAL_OFFSET,VERTICAL_OFFSET,FREQ,PERIOD,rv_signal,seq_days)
 ```
 
 
-# pairs plots
+# pairs plots for lines
+
 
 ```{r}
-library(GGally)
-```
-
-## single line
-```{r}
-# covariates
-covars = c("rv_template_0.5", "fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq", str_c("proj_hg_coeff_", seq(0,10,1)))
-
-sampleLine = sample(lineIDs,1)
-completeLines_df %>%
-  filter(line_order %in% sampleLine) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = fit_gauss_depth, y =fit_gauss_sigmasq)) +
-  ggtitle(sampleLine)
-
-completeLines_df %>%
-  filter(line_order %in% sampleLine) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = fit_gauss_depth, y =hg_coeff_0)) +
-  ggtitle(sampleLine)
-
-completeLines_df %>%
-  filter(line_order %in% sampleLine) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y =hg_coeff_2)) +
-  ggtitle(sampleLine)
-rm(sampleLine)
-```
-
-
-## hg0 v depth
-
-```{r}
+# covariates to visaulize
+covars = c("hg_coeff_0","fit_gauss_depth")
+# (random) sample of lines
 sampleLines = sample(lineIDs,4)
 
 completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
+  filter(line_order %in% sampleLines) %>%
   ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = fit_gauss_depth, color = factor(date_groups) ), size = .6) +
+  geom_point(mapping = aes(x = !!sym(covars[1]), y = !!sym(covars[2]), color = factor(date_groups) ), size = .6) +
   guides(color="none") +
   facet_wrap(vars(line_order), scales = "free")
 
-rm(sampleLines)
-```
-*furthest apart lines in omni*
-```{r}
-sampleLines = c("4644.76006_42","4647.46191_42","6139.39288_74","3938.44225_18")
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = fit_gauss_depth, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-*closest lines in omni*
-```{r}
-sampleLines = c("4985.24258_51","4036.37568_23","4442.06249_36","6371.21167_78")
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = fit_gauss_depth, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-## hg0 v hg2
-
-```{r}
-sampleLines = sample(lineIDs,4)
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = hg_coeff_2, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-*furthest apart lines in omni*
-```{r}
-sampleLines = c("4017.54991_22","3951.07013_19","4647.46191_42","4182.93369_28")
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = hg_coeff_2, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-*closest apart lines in omni*
-
-```{r}
-sampleLines = c("9864.42952_112","5159.41005_55","5005.43326_52","4707.22985_43")
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = hg_coeff_2, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-## hg1 v rv
-
-```{r}
-sampleLines = sample(lineIDs,4)
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_1, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-## hg/corrected hg
-
-```{r}
-sampleLines = sample(lineIDs,4)
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_1, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = proj_hg_coeff_1, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_1, y = proj_hg_coeff_1, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-```{r}
-sampleLines = sample(lineIDs,4)
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_3, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = proj_hg_coeff_3, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_3, y = proj_hg_coeff_3, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = proj_hg_coeff_1, y = proj_hg_coeff_3, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
+rm(sampleLines,covars)
 ```
 
 
-```{r}
-sampleLines = sample(lineIDs,4)
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
 
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = proj_hg_coeff_0, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
 
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_0, y = proj_hg_coeff_0, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
 
-rm(sampleLines)
-```
-
-
-```{r}
-sampleLines = sample(lineIDs,4)
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_2, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = proj_hg_coeff_2, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_2, y = proj_hg_coeff_2, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-```{r}
-sampleLines = sample(lineIDs,4)
-
-completeLines_df %>%
-  filter(line_order %in% sampleLines ) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = proj_hg_coeff_0, y = fit_gauss_depth, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-```{r}
-sampleLines = sample(lineIDs,4)
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = hg_coeff_3, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = thg_coeff_3, y = rv_template_0.5, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-completeLines_df %>%
-  filter(line_order %in%  sampleLines) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = thg_coeff_3, y = hg_coeff_3, color = factor(date_groups) ), size = .6) +
-  guides(color="none") +
-  facet_wrap(vars(line_order), scales = "free")
-
-rm(sampleLines)
-```
-
-
-# rv and depth visuals for sample of lineIDs
-
-```{r}
-library(patchwork)
-```
-
-```{r}
-interstingLines = c("4732.02805_44","5408.26971_61","6244.82532_76", "8250.39009_100")
-```
-
-no planet
-```{r}
-plot_df = completeLines_df %>%
-  filter(line_order %in% interstingLines) %>%
-  group_by(line_order) %>%
-  mutate(mean_depth = mean(fit_gauss_depth),
-         change_depth = fit_gauss_depth - mean_depth ) %>%
-  ungroup() %>%
-  mutate(lineID = str_c("wavelength = ", round(lambdac_vald,3), "\nmean depth = ", round(mean_depth,3), "\nspecies = ", species )) %>%
-  select(date, date_groups, lineID, rv_template_0.5, fit_gauss_depth, change_depth)
-```
-
-```{r}
-rv_time_plt = plot_df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = date, y = rv_template_0.5, color = date), size = .4, alpha = .8) +
-  xlab("Date") +
-  ylab("Radial velocity (m/s)") +
-  facet_wrap(vars(lineID), nrow = 1, scales = "free") +
-  theme_bw() + 
-  guides(color="none") +
-  scale_color_viridis_c() +
-  theme(axis.text = element_text(size = 6),
-        axis.title = element_text(size = 8))
-  
-depth_time_plt = plot_df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = date, y = change_depth, color = date ), size = .4, alpha = .8) +
-  guides(color="none") +
-  xlab("Date") +
-  ylab("Change in depth") +
-  facet_wrap(vars(lineID), nrow = 1, scales = "free") +
-  theme_bw() +
-  theme(strip.text.x = element_blank(),
-        axis.text = element_text(size = 6),
-        axis.title = element_text(size = 8)) + 
-  guides(color="none") +
-  scale_color_viridis_c()
-rv_depth_plt = plot_df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = change_depth, y = rv_template_0.5, color = date ), size = .4, alpha = .8) +
-  guides(color="none") +
-  xlab("Change in depth") +
-  ylab("Radial velocity (m/s)") +
-  facet_wrap(vars(lineID), nrow = 1, scales = "free") +
-  theme_bw() +
-  theme(strip.text.x = element_blank(),
-        axis.text = element_text(size = 6),
-        axis.title = element_text(size = 8))+ 
-  guides(color="none") +
-  scale_color_viridis_c()
-
-final_plot = rv_time_plt/depth_time_plt/rv_depth_plt
-
-# print the final arrangement
-print(final_plot)
-#ggsave(filename = "visuals/fourLinesRV.pdf", width = 10, height = 5, units = "in")
-``` 
-
-with a planet
-```{r}
-AMP = 3
-HORIZONTAL_OFFSET = 0
-VERTICAL_OFFSET = 0
-FREQ = 2*pi/365
-
-rv_df = ( injectPlanet(completeLines_df, amp = AMP, freq = FREQ, horizontal_offset = HORIZONTAL_OFFSET, vertical_offset = VERTICAL_OFFSET))
-  
-
-plot_df = rv_df %>%
-  filter(line_order %in% interstingLines) %>%
-  group_by(line_order) %>%
-  mutate(mean_depth = mean(fit_gauss_depth),
-         change_depth = fit_gauss_depth - mean_depth ) %>%
-  ungroup() %>%
-  mutate(lineID = str_c("wavelength = ", round(lambdac_vald,2)) ) %>%
-  select(date, date_groups, lineID, pert_rv, fit_gauss_depth, change_depth) %>%
-  rename(rv_template_0.5 = pert_rv)
-```
-
-*fixed plot*
-```{r}
-seq_days = seq(min(unique(plot_df$date)), max(unique(plot_df$date)), by = 1)
-planet_df = data.frame(days = seq_days,
-                       planet_rv = VERTICAL_OFFSET + AMP*sin(FREQ*changeFun(as.numeric(seq_days))+HORIZONTAL_OFFSET))
-#planet_df
-rv_time_plt = plot_df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = date, y = rv_template_0.5, color = date), size = .8, alpha = .87) +
-  geom_line(data = planet_df,mapping = aes(x = days, y = planet_rv), linetype = 1, linewidth = 1 ) +
-  xlab("Date") +
-  ylab("Radial velocity (m/s)") +
-  facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
-  theme_bw() + 
-  guides(color="none") +
-  scale_color_viridis_c() +
-  theme(axis.text = element_text(size = 12),
-        axis.title = element_text(size = 25),
-        strip.text.x = element_text(size = 20) )
-depth_time_plt = plot_df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = date, y = change_depth, color = date ), size = .8, alpha = .87) +
-  guides(color="none") +
-  xlab("Date") +
-  ylab("Change in depth") +
-  facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
-  theme_bw() +
-  theme(strip.text.x = element_blank(),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 25)) + 
-  guides(color="none") +
-  scale_color_viridis_c()
-rv_depth_plt = plot_df %>%
-  ggplot() +
-  geom_point(mapping = aes(x = change_depth, y = rv_template_0.5, color = date ), size = .8, alpha = .87) +
-  guides(color="none") +
-  xlab("Change in depth") +
-  ylab("Radial velocity (m/s)") +
-  facet_wrap(vars(lineID), nrow = 1, scales = "free") +
-  theme_bw() +
-  theme(strip.text.x = element_blank(),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 25))+ 
-  guides(color="none") +
-  scale_color_viridis_c()
-
-final_plot = rv_time_plt/depth_time_plt/rv_depth_plt
-
-# print the final arrangement
-print(final_plot)
-ggsave("visuals/fourLinesRV_planet.png", width = 13.5, height = 12.5)
-``` 
-
-
-
-
-```{r}
-rm(interstingLines, plot_df, rv_time_plt, depth_time_plt, rv_depth_plt, final_plot)
-```
-
-
-# mean vs sd of rv
-
-
-```{r}
-completeLines_df %>%
-  mutate(pixelLocation = (pixel_extracted_hi + pixel_extracted_lo)/2 ) %>%
-  group_by(line_order) %>%
-  summarize(meanRV = mean(rv_template_0.5),
-            sdRV = sd(rv_template_0.5),
-            pixel = mean(pixelLocation)) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = meanRV, y = sdRV), size = .2, alpha = .5) +
-  ylim(0,100) +
-  xlim(-25,25)
-```
-
-
-```{r}
-completeLines_df %>%
-  mutate(pixelLocation = (pixel_extracted_hi + pixel_extracted_lo)/2 ) %>%
-  group_by(line_order) %>%
-  summarize(meanRV = mean(rv_template_0.5),
-            sdRV = sd(rv_template_0.5),
-            pixel = mean(pixelLocation)) %>%
-  ggplot() +
-  geom_point(mapping = aes(x = meanRV, y = log(sdRV) ), size = .2, alpha = .5) +
-  #ylim(.5, 4.60517) +
-  xlim(-25,25)
-```
-
-# heatmap, rv by date
-
-```{r}
-rvLim = 80
-
-plotDF = completeLines_df %>%
-  mutate(date = as.factor(date)) %>%
-  filter(abs(rv_template_0.5) < rvLim)
-
-cat(nrow(completeLines_df) - nrow(plotDF), "removed observations\n")
-cat( 100*(nrow(completeLines_df) - nrow(plotDF))/nrow(completeLines_df), "percent removed\n" )
-cat(L_, "total lineIDs\n")
-
-allLinesHeat_plt = plotDF %>%
-  ggplot() +
-  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 300  ) +
-  geom_vline(xintercept = "2022-12-06", alpha = .5) +
-  annotate("text", x="2023-01-25", y = 70, label= "start date\nafter fire") +
-  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,65)) +
-  labs(x = "Day",
-       y = "Radial velocity (m/s)",
-       fill = "# of lineIDs") +
-  ylim(-rvLim - 1, rvLim + 1) +
-  theme_bw() +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
-
-allLinesHeat_plt 
-ggsave(allLinesHeat_plt,file = "visuals/heatmapRV_allLines.pdf", width = 10, height = 5)
-
-rm(allLinesHeat_plt, rvLim, plotDF)
-```
-
-
-```{r}
-lowPC1 = readRDS("lowPC1lines.rds")
-```
-
-```{r}
-rvLim = 80
-
-plotDF = completeLines_df %>%
-  filter(line_order %in% lowPC1) %>%
-  mutate(date = as.factor(date)) %>%
-  filter(abs(rv_template_0.5) < rvLim)
-
-cat(length(lowPC1),"low PC1 lineIDs\n")
-
-lowPC1LinesHeat_plt = plotDF %>%
-  ggplot() +
-  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 300  ) +
-  geom_vline(xintercept = "2022-12-06", alpha = .5) +
-  annotate("text", x="2023-01-25", y = 70, label= "start date\nafter fire") +
-  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,65)) +
-  labs(x = "Day",
-       y = "Radial velocity (m/s)",
-       fill = "# of lineIDs") +
-  ylim(-rvLim - 1, rvLim + 1) +
-  theme_bw() +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
-lowPC1LinesHeat_plt
-ggsave(lowPC1LinesHeat_plt,file = "visuals/heatmapRV_lowPC1Lines.pdf", width = 10, height = 5)
-rm(lowPC1LinesHeat_plt, plotDF, rvLim)
-```
-
-```{r}
-rvLim = 80
-
-plotDF = completeLines_df %>%
-  filter( !(line_order %in% lowPC1) )%>%
-  mutate(date = as.factor(date)) %>%
-  filter(abs(rv_template_0.5) < rvLim)
-
-cat(L_-length(lowPC1),"high PC1 lineIDs\n")
-
-highPC1LinesHeat_plt = plotDF %>%
-  ggplot() +
-  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 300  ) +
-  geom_vline(xintercept = "2022-12-06", alpha = .5) +
-  annotate("text", x="2023-01-25", y = 70, label= "start date\nafter fire") +
-  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,65)) +
-  labs(x = "Day",
-       y = "Radial velocity (m/s)",
-       fill = "# of lineIDs") +
-  ylim(-rvLim - 1, rvLim + 1) +
-  theme_bw() +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
-highPC1LinesHeat_plt
-ggsave(highPC1LinesHeat_plt,file = "visuals/heatmapRV_highPC1Lines.pdf", width = 10, height = 5)
-rm(highPC1LinesHeat_plt,plotDF, rvLim)
-```
-
-
-# mean/sd rv across lineIDs
-
-```{r}
-# rv limit of the plot
-rvLim = 50
-
-plotDF = completeLines_df %>%
-  mutate(line_order = as.factor(line_order)) %>%
-  arrange(fit_gauss_lambdac, order_idx) %>%
-  group_by(line_order) %>%
-  summarize( meanRV = mean(rv_template_0.5),
-             sdRV = sd(rv_template_0.5),
-             medRV = median(rv_template_0.5),
-             upperQuant = quantile(rv_template_0.5, probs = .75),
-             lowerQuant = quantile(rv_template_0.5, probs = .25))
-
-# number of lineIDs kept
-print( nrow( plotDF %>% filter(upperQuant <= rvLim, lowerQuant >= -rvLim) ) )
-
-plotDF %>%
-  filter(upperQuant <= rvLim, lowerQuant >= -rvLim) %>%
-  ggplot( mapping = aes(x = line_order, y = medRV) ) +
-  geom_point(size = .2) +
-  geom_errorbar(mapping = aes(ymin = lowerQuant, ymax = upperQuant), linewidth = .35) +
-  theme_minimal() + 
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank()
-  ) +
-  ylim(-rvLim,rvLim) +
-  labs(title = "Distribution of RV by absorption line",
-       x = "absorption line",
-       y = "radial velocity (m/s)")
-  
-
-ggsave("rvQuantilesByLine.pdf", width = 20, height = 6)
-
-rm(rvLim, plotDF)
-```
-
-# mean/median rv by date
-
-```{r}
-completeLines_df %>%
-  group_by(date) %>%
-  summarize(mean_rv_day = mean(rv_template_0.5),
-            med_rv_day = median(rv_template_0.5)) %>%
-  select(date, mean_rv_day, med_rv_day) %>%
-  unique() %>%
-  ggplot() +
-  xlab("date") +
-  ylab("radial velocity (m/s)") +
-  geom_point(mapping = aes(x = date, y = mean_rv_day), color = "purple", alpha = .8, size = .8) +
-  #geom_point(mapping = aes(x = date, y = med_rv_day), color = "orange", alpha = .8, size = .8) +
-  geom_hline(yintercept = 0, linetype = 1)
-```
 

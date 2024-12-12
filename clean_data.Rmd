@@ -75,8 +75,10 @@ for (i in 1:length(files) ) {
     
     # find orthogonal, "cleaned" gh coefficients
     # each element in the rows of the matrix rep(1,345) %*% t(d) are multiplied by the corresponding element of the vector G %*% d /sum(d*d)
-    HG_perp = HG - sweep( x = rep(1,345) %*% t(d_gh), MARGIN = 1, STATS = HG %*% d_gh / sum(d_gh*d_gh), FUN = "*")
-    THG_perp = THG - sweep( x = rep(1,345) %*% t(d_tgh), MARGIN = 1, STATS = THG %*% d_tgh / sum(d_tgh*d_tgh), FUN = "*")
+    # HG_perp = HG - sweep( x = rep(1,345) %*% t(d_gh), MARGIN = 1, STATS = HG %*% d_gh / sum(d_gh*d_gh), FUN = "*")
+    # THG_perp = THG - sweep( x = rep(1,345) %*% t(d_tgh), MARGIN = 1, STATS = THG %*% d_tgh / sum(d_tgh*d_tgh), FUN = "*")
+    HG_perp = HG - (HG %*% d_gh) %*% t(d_gh) / sum(d_gh * d_gh)
+    THG_perp = THG - (THG %*% d_tgh) %*% t(d_tgh) / sum(d_tgh * d_tgh)
     
     # store the perpendicular hg coefficients into the temp dataframe
     temp_df[ str_c("proj_", hg_colnames) ] = HG_perp
@@ -113,6 +115,14 @@ final_df %>%
   count(line_order) %>%
   nrow()
 ```
+
+```{r}
+final_df %>%
+  filter( (order_idx %in% c(56,57,58)) ) %>%
+  select(order_phys) %>%
+  count(order_phys)
+```
+
 ```{r}
 final_df = final_df %>%
   filter( !(order_idx %in% c(56,57,58)) )
@@ -210,15 +220,16 @@ rm(badcalibrate_days)
 ## write file
 ```{r}
 # write to csv
-write_csv(final_df, "/Users/josephsalzer/research/exostat/completeLines2.csv")
+write_csv(final_df, "/Users/josephsalzer/research/exostat/completeLines.csv")
 ```
 
 # summaries
 
 ```{r}
 # read data
-final_df = read_csv("/Users/josephsalzer/research/exostat/completeLines2.csv")
+final_df = read_csv("/Users/josephsalzer/research/exostat/completeLines.csv")
 ```
+
 
 ```{r}
 summary(final_df)

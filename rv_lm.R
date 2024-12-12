@@ -112,7 +112,7 @@ designMat = sparse.model.matrix(
 timeFE_columns = levels(temp_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
 # append the group ID to the end of these columns
 timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
-# rename columns of design matrix, assuming that the first T are the intercept plus timeFE
+# rename columns of design matrix, assuming that the first T are the intercept and the time fixed effects
 # colnames(designMat)[1:sum(group_sizes)] = c("(Intercept)",
 #                                             str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1)),
 #                                             timeFE_columns)

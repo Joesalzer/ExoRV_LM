@@ -87,7 +87,7 @@ temp_df
 
 
 
-# testing contrasts wrt to different grand means
+# testing contr_groupSum
 
 ```{r}
 # grand means

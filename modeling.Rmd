@@ -21,19 +21,14 @@ pass covariateNames to script
 ```{r}
 covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_hg_coeff_", c(0,seq(2,10,1))))
 # covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_thg_coeff_", c(0,seq(2,10,1))))
-# covariateNames = c()
+#covariateNames = c()
 
 print(covariateNames)
 ```
 
 fit_gauss_a,fit_gauss_b,fit_gauss_depth,fit_gauss_sigmasq,proj_hg_coeff_0,proj_hg_coeff_2,proj_hg_coeff_3,proj_hg_coeff_4,proj_hg_coeff_5,proj_hg_coeff_6,proj_hg_coeff_7,proj_hg_coeff_8,proj_hg_coeff_9,proj_hg_coeff_10
 
-*random variables*
-```{r}
-# completeLines_df[paste0("rand_col", 1:14)] = lapply(1:14, function(x) rnorm(nrow(completeLines_df)))
-# covariateNames = str_c("rand_col", 1:14)
-# covariateNames
-```
+Rscript rv_lm.R completeLines.csv
 
 ```{r}
 # get csv file name
@@ -70,6 +65,8 @@ L_ = length(lineIDs)
 ```
 
 ## create model formula and subdirectories
+
+the following chunk is the typical specification of the linear models as described in the paper and included in the script "rv_lm.R"
 
 ```{r}
 # create directory called "models" in working directory
@@ -115,10 +112,20 @@ cat("The model formula is:\n", as.character(modelFormula), "\n")
 cat("The model name is:", model_name, "\n")
 ```
 
-below are special types of the linear models, common slopes for covariateNames, and multiple intercept/slope per lineID/time group models
+below are special types of the linear models: randomly assigned covariates, common slopes for covariateNames, and multiple intercept/slope per lineID/time group models
 
 *random covars*
+random variables
 ```{r}
+set.seed(123)
+completeLines_df[paste0("rand_col", 1:14)] = lapply(1:14, function(x) rnorm(nrow(completeLines_df)))
+covariateNames = str_c("rand_col", 1:14)
+covariateNames
+```
+
+```{r}
+modelFormula = as.formula(~ date + line_order + line_order:rand_col1_centered + line_order:rand_col2_centered + line_order:rand_col3_centered + line_order:rand_col4_centered + line_order:rand_col5_centered + line_order:rand_col6_centered + line_order:rand_col7_centered + line_order:rand_col8_centered + line_order:rand_col9_centered + line_order:rand_col10_centered + line_order:rand_col11_centered + line_order:rand_col12_centered + line_order:rand_col13_centered + line_order:rand_col14_centered )
+
 model_name = "random_covars"
 model_dir = str_c(WD_DATA,"models/",model_name)
 # create directory
@@ -344,7 +351,7 @@ saveRDS(list(designMat = designMat,
 ```{r}
 # arguments passed to command line
 # model name
-MODEL_NAME = "Gauss=all_HG=all"
+MODEL_NAME = "TWFE"
 BATCH_SIZES = 1000
 ```
 
@@ -561,9 +568,9 @@ rm(boot_straps)
 # pass on command line
 
 # model name
-MODEL_NAME = "Gauss=all_HG=all"
+MODEL_NAME = "LASSO"
 # number of timeIDs in each leave-one-out cv
-CV_NUM_DAY = 7
+CV_NUM_DAY = 28
 ```
 
 *replace response with planet*
@@ -605,8 +612,8 @@ if ( !dir.exists(str_c(WD_DATA,"models/",MODEL_NAME,"/cv")) ) {
 left_out_timeIDs = create_sliding_windows(timeIDs, CV_NUM_DAY)
 left_out_timeIDs[[1]]
 left_out_timeIDs[[2]]
-left_out_timeIDs[[3]]
-left_out_timeIDs[[4]]
+left_out_timeIDs[[15]]
+left_out_timeIDs[[25]]
 ```
 
 ```{r}
@@ -620,17 +627,18 @@ cv_parallel = function(i) {
   
   # get standardized rv dataframe, seperate into train and test datasets
   standardized_list = standardize(df, covariates = covariateNames, response = RESPONSE, lineIDname = LINE_ID_NAME, test_index = cv_index)
-  
+
   # get training and testing sets
   train_df = standardized_list$train.df %>%
     mutate(!!TIME_ID_NAME := factor( !!sym(TIME_ID_NAME) ),
            !!LINE_ID_NAME := factor( !!sym(LINE_ID_NAME) )) %>%
     arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
-  
+
   test_df = standardized_list$test.df %>%
     mutate(!!TIME_ID_NAME := factor(!!sym(TIME_ID_NAME)),
            !!LINE_ID_NAME := factor(!!sym(LINE_ID_NAME))) %>%
     arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+
   
   # get group sizes
   timeGroup_ids = train_df %>%
@@ -641,7 +649,6 @@ cv_parallel = function(i) {
   # get which date groups are in the testing set
   test_df = test_df %>%
     mutate(!!TIMEGROUP_ID_NAME := factor(!!sym(TIMEGROUP_ID_NAME), levels = names(group_sizes) ) )
-  
   # (sparse) design matrix for model, set contrasts
   X_train = sparse.model.matrix(modelFormula,
                                 train_df,
@@ -834,7 +841,7 @@ cv_parallel_LASSO = function(i) {
 ```
 
 ```{r}
-cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel_LASSO, mc.cores = 7)
+cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel_LASSO, mc.cores = 8)
 #cv_df = do.call(rbind, cv_list)
 rm(cv_list)
 ```
@@ -849,12 +856,20 @@ y = responses
 ```
 
 ```{r}
+model_name = "LASSO"
+model_dir = str_c(WD_DATA,"models/",model_name)
+# create directory
+if (!dir.exists(model_dir)) {dir.create(model_dir)}
+```
+
+```{r}
 # set the penalty factors
 penalty_factors = rep(1, ncol(X[,-1]))
 # determine number of parameters to not penalize (intercept, time FE, line FE)
 non_penalized = T_ + L_ - 2
 # set the non-penalized columns
 penalty_factors[1:non_penalized] = 0
+
 # check to make sure correct columns are/arent penalized!
 head(colnames(X[,-1])[1:non_penalized])
 tail(colnames(X[,-1])[1:non_penalized], 13)
@@ -862,8 +877,8 @@ tail(colnames(X[,-1])[1:non_penalized], 13)
 
 ```{r}
 # initialize runs, lambdas, number of zero columns, AIC, BIC, and RMSE
-num_runs = 140
-lambdas = seq(0, 0.0002, length.out = num_runs)
+num_runs = 25
+lambdas = seq(0.00021, 0.0004, length.out = num_runs)
 numZeroCols = rep(NA,num_runs)
 AICs = rep(NA,num_runs)
 BICs = rep(NA,num_runs)
@@ -888,7 +903,7 @@ for (i in 1:length(lambdas)) {
   # fit the linear model using all data
   fit_lm = sparseLM(designMat_LASSO, y)
   # initialize 0's in the linear operator
-  linear_op_mat = matrix(data = 0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]) )
+  linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
   # matrix for estimating the cleaned RV
   linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
   # dataframe of date's cleaned rv
@@ -907,19 +922,10 @@ for (i in 1:length(lambdas)) {
 ```
 
 
-```{r}
-saveRDS(list(lambdas = lambdas,
-             numZeroCols = numZeroCols,
-             AICs = AICs,
-             BICs = BICs,
-             RMSEs = RMSEs,
-             RSEs = RSEs),
-        file = str_c(model_dir, "/LASSO_results.rds") )
-```
-
+## view LASSO results
 ```{r}
 lasso_results = readRDS(str_c(model_dir, "/LASSO_results.rds"))
-lasso_results
+#lasso_results
 ```
 
 ```{r}
@@ -1023,7 +1029,7 @@ saveRDS(list(designMat = designMat_LASSO,
              cleanRV_df = cleanRV_df,
              RMSE = RMSE,
              lasso_zero_columns = zero_columns),
-        file = str_c(model_dir, "/model_LASSO.rds" ) )
+        file = str_c(model_dir, "/model.rds" ) )
 ```
 
 
