@@ -1,5 +1,5 @@
-file: readSpectra.R
-\tab r script that contains helper functions for use throughout this project
+file: readSpectra.R <br>
+&nbsp r script that contains helper functions for use throughout this project
 
 file: clean_data.Rmd
 	Uses the directory "line_property_files" to join all of the absorption line data together. The output is completeLines.csv, which is a data file for every line's shape properties, line-specific information, and contaminated radial velocity. This script also provides some summary information and checks of individual lines (like lines that have constant b1 and width). Some lines and days are removed from the analysis (and some lines failed to be read-in) as specified in the paper. Projected HG coefficients are also calculated, reading in the file project_template/project_template_deriv_onto_gh.h5

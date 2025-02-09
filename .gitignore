@@ -36,9 +36,15 @@
 ehthumbs.db
 Thumbs.db
 
-# Large Files #
+# Large/Uncessary Files #
 ######################
 *.h5
 *.csv
+*.rds
 helperfunction_testing.Rmd
 spectrum_loading.Rmd
+bisector/
+line_property_files/
+models/
+project_template/
+visuals/
