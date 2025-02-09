@@ -40,3 +40,5 @@ Thumbs.db
 ######################
 *.h5
 *.csv
+helperfunction_testing.Rmd
+spectrum_loading.Rmd
