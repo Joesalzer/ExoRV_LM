@@ -213,7 +213,7 @@ standardize = function(current_df, covariates = NULL, test_index = NULL, respons
   # drop mean covariates from train data
   train = train[, !colnames(train) %in% str_c(covariates,"_mean") ]
 
-  ## if we dont want to do training and testing, this just returns the train set ##
+  ## if we dont want to do training and testing split, this just returns the train set ##
   if (is.null( test_index )) {
     return(list(train.df = train,
                 train_means = train_means,
@@ -279,19 +279,20 @@ sparseLM = function(X, Y, PRINT_TIME = T) {
   p = ncol(X)
   n = nrow(X)
   
-  # sigma2 hat and variance of beta_hat
-  sigma2_hat = drop( crossprod(resid) / (n-p) )
-  var_beta_hat = sigma2_hat * XtX_inv
-  
   # sum of squared residuals
-  SSR = sum(resid^2)
+  SSR = drop(crossprod(resid))
+  
+  # sigma2 hat and variance of beta_hat
+  sigma2_hat = SSR / n 
+  var_beta_hat = sigma2_hat * XtX_inv
+
   # total sum of squares
   SST = sum( ( Y - mean(Y) )^2 )
   # R-squared, AIC, BIC calculations
   R2 = 1-SSR/SST
   adj_R2 = 1 - (1- R2)*(n - 1)/(n - p - 1)
   AIC = n * log(SSR/n) + 2 * p
-  BIC = n * log(SSR/n) + 2 * log(n)
+  BIC = n * log(SSR/n) + p * log(n)
   # residual standard errors
   RSE = sqrt( SSR/(n-p) )
   
@@ -626,6 +627,17 @@ contr_groupSum = function(group_sizes) {
       bdiag(lapply(group_sizes, contr.sum))
     )
   )
+}
+
+contr_groupSum2 = function(group_sizes) {
+  # number of groups
+  num_groups = length(group_sizes)
+  # if only one group, return sum2zero contrasts for time
+  if (num_groups == 1) {
+    return(contr.sum(group_sizes))
+  }
+  # return contrast, the first columns encode the grand means for each group, and the subsequent columns encode the sum2zero contrasts within each group
+  return(bdiag(lapply(group_sizes, contr.sum)))
 }
 
 # function to make a custom contrast from a vector of group sizes and number of lines

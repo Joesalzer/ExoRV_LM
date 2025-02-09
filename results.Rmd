@@ -37,35 +37,29 @@ LINE_ID_NAME = "line_order"
 TIMEGROUP_ID_NAME = "date_groups"
 ```
 
-model name
-
 ```{r}
-model_name = "Gauss=all_HG=all"
+model_name = "LASSO"
 ```
 
-TWFE
+*Options for model name:*
+
+TWFE (Baseline model)
 Gauss=all_HG=none
 Gauss=none_HG=all
-Gauss=all_HG=all
-CS_Gauss=all_HG=all
-LASSO
-
-Gauss=all_THG=all
-Gauss=depth_HG=all
-Gauss=all_HG=0,2,3,4,5,6,7
-Gauss=all_HG=0,2,3,4,5,6,7,8
-Gauss=all_HG=0,2,3,4,5,6,7,8,9
+Gauss=all_HG=all (Full model)
+CommonSlopes
+LASSO (Full Model w/ LASSO)
 
 # fit results
 
 ```{r}
-model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model.rds" ))
+model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model_BIC.rds" ))
 
 # get the lm fit and dataframe
 designMat = model_fit$designMat
 responses = model_fit$responses
 rv_df = model_fit$df
-timeGroup_ids = model_fit$timeGroup_ids
+group_sizes = model_fit$group_sizes
 modelFormula = model_fit$modelFormula
 covariates = model_fit$covariates
 fit_lm = model_fit$fit_lm
@@ -124,37 +118,6 @@ cat(model_name, "&",
     round(model_fit$RMSE,3), "\\\\"
     )
 ```
-
-Gauss=all_HG=0,2,3,4,5,6,7 
- AIC: 10.381e5 
- BIC: 10.188e5 
- RSE: 7.4127
- Parameters: 9665
- RMSE of cleaned RV to true planet: 0.689 
- mean se: 0.27 
- coverage 1se: 0.297
- coverage 2se: 0.582
- 
-Gauss=all_HG=0,2,3,4,5,6,7,8 
- AIC: 10.262e5 
- BIC: 10.054e5 
- RSE: 7.2328
- Parameters: 10443
- RMSE of cleaned RV to true planet: 0.66 
- mean se: 0.264 
- coverage 1se: 0.309
- coverage 2se: 0.594
- 
-Gauss=all_HG=0,2,3,4,5,6,7,8,9 
- AIC: 10.13e5 
- BIC: 9.906e5 
- RSE: 7.0385
- Parameters: 11221
- RMSE of cleaned RV to true planet: 0.636 
- mean se: 0.257 
- coverage 1se: 0.33
- coverage 2se: 0.588
- 
 
 ## diagnostic plots
 
@@ -347,7 +310,34 @@ rm(model_fit_TWFE,model_fit_FULL)
 
 ```{r}
 cleanRV_df %>%
-  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name)) +
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name, shape = model_name)) +
+  geom_point(size = 1.2, alpha = 0.85) +
+  geom_hline(yintercept = 0, color = "black") +
+  scale_color_manual(values = c("#ff7f00", "#377eb8")) +
+  scale_shape_manual(values = c(16, 17)) +
+  guides(
+    color = guide_legend(title = "Model", override.aes = list(size = 4)),
+    shape = guide_legend(title = "Model")
+  ) +
+  labs(
+    y = "Cleaned RV - True Signal (m/s)",
+    x = "Date"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 20),
+    legend.position = "bottom"
+  )
+
+ggsave("visuals/cleanRV.pdf", width = 10, height = 5)
+```
+
+```{r}
+cleanRV_df %>%
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name, shape = model_name)) +
   geom_point(size = 1, alpha = .85) +
   #geom_ribbon(aes(ymin = estimate-1, ymax = estimate+1), alpha = .3 ) +
   geom_hline(yintercept = 0, color = "black") +
@@ -363,7 +353,7 @@ cleanRV_df %>%
         legend.text=element_text(size=20),
         legend.position="bottom")
 
-ggsave("visuals/cleanRV.png", width = 10, height = 5)
+ggsave("visuals/cleanRV.pdf", width = 10, height = 5)
 ```
 
 
@@ -453,8 +443,6 @@ quantile(rmse_boot, probs = c(.005,.995))
 
 
 
-*coverage comparisons*
-
 ```{r}
 cleanRV_df %>%
   ggplot() +
@@ -466,13 +454,16 @@ cleanRV_df %>%
   theme(axis.text = element_text(size = 12),
         axis.title = element_text(size = 23))
 
-ggsave("visuals/se_cleanRV.png", width = 10, height = 5)
+ggsave("visuals/se_cleanRV.pdf", width = 10, height = 5)
 ```
+
+
+
 ```{r}
 summary(cleanRV_df$se)
 ```
 
-
+*coverage comparisons*
 find how much we have to multiply the se by to get a certain coverage
 
 ```{r}
@@ -514,6 +505,7 @@ rm(N,i,mleCoverage)
 ```
 
 boot coverage
+
 ```{r}
 N = 250
 bootCoverage = seq(from = .68,to = 1,length.out = N)
@@ -566,8 +558,143 @@ ggplot() +
                       values = c("black","red")) +
   guides(color=guide_legend(override.aes = list(linewidth=2)))
 
-ggsave("visuals/CI_coverage.png", width = 7, height = 7)
+ggsave("visuals/CI_coverage.pdf", width = 7, height = 7)
 ```
+
+
+*using quantile-based coverage for bootstrap*
+
+
+```{r}
+cleanRV_boot_df[1:5,1:5]
+dim(cleanRV_boot_df)
+```
+
+Each row is a bootstrap sample and each column is the bootstrap clean RV for a day. I tried to evaluate quantiles (at various levels) of each bootstrap clean RV to determine the bootstrap confidence interval for each of the cleaned RVs.
+
+```{r}
+alpha_ = 0
+upper_quant = apply(cleanRV_boot_df, 2, quantile, probs = 1-alpha_/2)
+lower_quant = apply(cleanRV_boot_df, 2, quantile, probs = alpha_/2)
+mean( (upper_quant > 0) & (lower_quant < 0) )
+summary(upper_quant-lower_quant)
+```
+```{r}
+upper_quant = apply(cleanRV_boot_df, 2, max)
+lower_quant = apply(cleanRV_boot_df, 2, min)
+mean( (upper_quant > 0) & (lower_quant < 0) )
+
+rm(alpha_, upper_quant, lower_quant)
+```
+
+unfortunately, with the above we will never reach a coverage above 0.869697, because the max - min only ever achieves a coverage of 0.869697
+
+```{r}
+findQuant4Coverage = function(boot_samples, desired_coverage, tol = .001) {
+  alpha_ = 0
+  upper_quant = apply(cleanRV_boot_df, 2, quantile, probs = 1-alpha_/2)
+  lower_quant = apply(cleanRV_boot_df, 2, quantile, probs = alpha_/2)
+  current_coverage = mean( (upper_quant > 0) & (lower_quant < 0) )
+  
+  while (current_coverage > desired_coverage) {
+    alpha_ = alpha_ + tol
+    upper_quant = apply(cleanRV_boot_df, 2, quantile, probs = 1-alpha_/2)
+    lower_quant = apply(cleanRV_boot_df, 2, quantile, probs = alpha_/2)
+    current_coverage = mean( (upper_quant > 0) & (lower_quant < 0) )
+  }
+  
+  # CI length at desired level of coverage
+  CI_lengths = upper_quant-lower_quant
+  
+  return(c(alpha_ = alpha_,
+           current_coverage = current_coverage,
+           mean_CI = mean(CI_lengths),
+           med_CI = median(CI_lengths),
+           quant95 = unname(quantile(CI_lengths,.95)),
+           quant05 = unname(quantile(CI_lengths,.05)),
+           quant25 = unname(quantile(CI_lengths,.25)),
+           quant75 = unname(quantile(CI_lengths,.75))
+           ))
+}
+```
+
+```{r}
+N = 100
+bootCoverage = seq(from = .68,to = 0.86,length.out = N)
+
+bootQuantCoverage_df = data.frame( matrix(NA,ncol=9) )
+colnames(bootQuantCoverage_df) = c("desired_coverage","mult","current_coverage","mean_CI","med_CI","quant95","quant05","quant25","quant75")
+
+for (i in 1:N) {
+  bootQuantCoverage_df[i,] = c(bootCoverage[i],
+                          findQuant4Coverage(cleanRV_boot_df,bootCoverage[i]))
+  if (i %% 10 == 0) print(i)
+}
+```
+
+
+```{r}
+bootQuantCoverage_df
+```
+
+```{r}
+bootQuantCoverage_df = bootQuantCoverage_df %>%
+  mutate(uncertainty_method = "quantile_boot")
+
+coverage_df = rbind(coverage_df,bootQuantCoverage_df)
+```
+
+median ci length by coverage (by method)
+```{r}
+coverage_df %>%
+  filter(desired_coverage < 0.84) %>%
+  ggplot() +
+  geom_line(mapping = aes(x = desired_coverage,
+                          y = med_CI,
+                          color = uncertainty_method),
+            linewidth = 1) +
+  theme_bw() +
+  theme(legend.title = element_blank(),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 12),
+        legend.text=element_text(size=12),
+        legend.position="bottom") +
+  scale_y_log10() +
+  xlab("Coverage") +
+  ylab("Confidence Interval Length") +
+  guides(color=guide_legend(override.aes = list(linewidth=2)))
+
+```
+
+```{r}
+coverage_df %>%
+  filter(desired_coverage < 0.84) %>%
+  ggplot() +
+  geom_line(mapping = aes(x = desired_coverage,
+                          y = med_CI,
+                          color = uncertainty_method),
+            linewidth = 1) +
+  geom_line(mapping = aes(x = desired_coverage,
+                          y = quant25,
+                          color = uncertainty_method),
+            linewidth = 1,
+            linetype = 3) +
+    geom_line(mapping = aes(x = desired_coverage,
+                          y = quant75,
+                          color = uncertainty_method),
+            linewidth = 1,
+            linetype = 3) +
+  theme_bw() +
+  theme(legend.title = element_blank(),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 12),
+        legend.text=element_text(size=12),
+        legend.position="bottom") +
+  xlab("Coverage") +
+  ylab("Confidence Interval Length") +
+  guides(color=guide_legend(override.aes = list(linewidth=2)))
+```
+
 
 
 # cross validation
@@ -641,11 +768,15 @@ cv_df %>%
          cv_procedure == "LOOMCV") %>%
   mutate(modelID = ifelse(modelID == "TWFE","Baseline model","Full Model") ) %>%
   ggplot() +
-  geom_point(mapping = aes(x = as.Date(date), y = seRV, color = modelID), size = 1, alpha = .85) +
+  geom_point(mapping = aes(x = as.Date(date), y = seRV, color = modelID, shape = modelID), size = 1.4, alpha = .85) +
   theme_minimal() +
   scale_y_log10() +
   scale_color_manual(values=c("#ff7f00", "#377eb8")) +
-  guides(color=guide_legend(override.aes = list(size=5))) +
+  scale_shape_manual(values = c(16, 17)) +
+  guides(
+    color = guide_legend(title = "Model", override.aes = list(size = 5)),
+    shape = guide_legend(title = "Model")
+  ) +
   ylab("Standard Error (m/s)") +
   xlab("Date") +
   theme_bw() +
@@ -656,7 +787,7 @@ cv_df %>%
         legend.text=element_text(size=20),
         legend.position="bottom")
 
-ggsave("visuals/cv_se.png", width = 10, height = 5)
+ggsave("visuals/cv_se.pdf", width = 10, height = 5)
 ```
 
 ```{r}

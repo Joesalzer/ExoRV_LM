@@ -8,7 +8,6 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 source("/Users/josephsalzer/research/exostat/readSpectra.R")
-library(ggpubr)
 ```
 
 ```{r}
@@ -55,12 +54,12 @@ rv_mat = rv_df %>% select(!date)
 *ADDING PLANERTARY SIGNAL IS LIKE ADDING A RANK 1 MATRIX TO OUR LINES*
 
 ```{r}
-# planetary signal
-planet_signal = 5*sin( (2*pi/366)*changeFun( as.numeric(rv_df$date) ))
-# matrix to perturb the original dataframe by
-planet_mat = planet_signal %*% t(rep(1,L_))
-# stellar activity plus planet signal
-RVplanet_mat = rv_mat + planet_mat
+# # planetary signal
+# planet_signal = 5*sin( (2*pi/366)*changeFun( as.numeric(rv_df$date) ))
+# # matrix to perturb the original dataframe by
+# planet_mat = planet_signal %*% t(rep(1,L_))
+# # stellar activity plus planet signal
+# RVplanet_mat = rv_mat + planet_mat
 ```
 
 *RUN PCA*

@@ -1,7 +1,7 @@
 source("readSpectra.R")
-library(Matrix)
-library(parallel)
-library(pbmcapply)
+#library(Matrix)
+#library(parallel)
+#library(pbmcapply)
 
 # capture command line arguments
 args = commandArgs(trailingOnly = TRUE)
@@ -15,10 +15,10 @@ if (is.na(args[2])) {
   covariateNames = unlist(strsplit(args[2], ","))
 }
 
-## variables to be set by the user ##
+## variables below to be set by the user ##
 # working directory with the data
 WD_DATA = "/Users/josephsalzer/research/exostat/"
-# response variable
+# RESPONSE variable
 RESPONSE = "rv_template_0.5"
 # names of the timeID, lineID, and timeGroupID
 TIME_ID_NAME = "date"
@@ -27,10 +27,8 @@ TIMEGROUP_ID_NAME = "date_groups"
 # csv file name
 completeLines_df = read_csv(str_c(WD_DATA,csvFileName)) %>%
   mutate(!!TIME_ID_NAME := as.Date( !!sym(TIME_ID_NAME) ))
-## variables to be set by the user ##
 
 ## get list of lineIDs and timeIDs
-
 # vec of lineIDs  in completeLines_df
 lineIDs = completeLines_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
 # vec of timeIDs in completeLines_df
@@ -42,17 +40,20 @@ L_ = length(lineIDs)
 
 # create directory called "models" in working directory
 if (!dir.exists(str_c(WD_DATA,"models"))) {dir.create(str_c(WD_DATA,"models"))}
+
 # base TWFE formula
-twfe_formula = paste0("~ ",TIME_ID_NAME," + ",LINE_ID_NAME)
+twfe_formula = paste0("~ 0 ")
+
 # if covariateNames aren't empty, include interactions, else use TWFE
 if (!is_empty(covariateNames)) {
+  
   # build interactions with LINE_ID_NAME for each provided centered covariate
   covar_slopes = paste0(LINE_ID_NAME,":", covariateNames, "_centered", collapse = " + ")
   # construct the full formula
   modelFormula = as.formula(paste(twfe_formula, covar_slopes, sep = " + "))
   
   # name the current model, using Gaussian fit parameters and hg covariateNames
-  ## remove or edit these lines if using other covariateNames ##
+  ## remove or edit below lines if using other covariates ##
   gaussCovars = covariateNames[startsWith(covariateNames,"fit_gauss")]
   gaussCovars_names = paste(str_split_i(gaussCovars, "_", i = 3),collapse=",")
   if (gaussCovars_names=="") {gaussCovars_names = "none"} else if(length(gaussCovars) == 4) {gaussCovars_names = "all"}
@@ -60,6 +61,7 @@ if (!is_empty(covariateNames)) {
   hgCovars_names = paste(str_split_i(hgCovars, "_", i = 4),collapse=",")
   if (hgCovars_names=="") {hgCovars_names = "none"} else if(length(hgCovars) == 10) {hgCovars_names = "all"}
   model_name = str_c("Gauss=",gaussCovars_names,"_HG=",hgCovars_names)
+  ## remove or edit above lines if using other covariates ##
   
   # create model directory
   model_dir = str_c(WD_DATA,"models/",model_name)
@@ -71,87 +73,88 @@ if (!is_empty(covariateNames)) {
   modelFormula = as.formula(twfe_formula)
   # model name
   model_name = "TWFE"
-  
   # create model directory
   model_dir = str_c(WD_DATA,"models/",model_name)
   if (!dir.exists(model_dir)) {dir.create(model_dir)}
   rm(twfe_formula)
 }
 
-cat("The model formula is:\n", as.character(modelFormula), "\n")
+cat("The model formula for the covariates is:\n", as.character(modelFormula), "\n")
 cat("The model name is:", model_name, "\n")
 
 ## standardize dataframe
 
-# get standardized rv arranging by line_order and then date
-rv_df = ( completeLines_df %>%
-            standardize(covariates = covariateNames, response = RESPONSE, lineIDname = LINE_ID_NAME) )$train.df %>%
-  arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
+# get standardized dataframe arranging by line ID and then time ID
+standardized_list = completeLines_df %>%
+  standardize(covariates = covariateNames, response = RESPONSE, lineIDname = LINE_ID_NAME)
+rv_df = standardized_list$train.df %>%
+  arrange(LINE_ID_NAME, TIME_ID_NAME) %>%
+  mutate(timeID = factor(!!sym(TIME_ID_NAME)),
+         lineID = factor(!!sym(LINE_ID_NAME)))
+
+# set responses
+responses = rv_df[[RESPONSE]]
 
 ## set contrasts and make design matrix, custom contrasts for timeIDs, sum2zero for lineIDs (single intercept, single slope model)
 
-# create factors out of date + line_order
-temp_df = rv_df %>%
-  mutate(!!TIME_ID_NAME := factor( !!sym(TIME_ID_NAME) ),
-         !!LINE_ID_NAME := factor( !!sym(LINE_ID_NAME) ))
 # get group sizes
-timeGroup_ids = temp_df %>%
-  dplyr::select(!!sym(TIMEGROUP_ID_NAME), !!sym(TIME_ID_NAME)) %>%
-  unique()
-group_sizes = table(timeGroup_ids[[TIMEGROUP_ID_NAME]])
-# (sparse) design matrix for model, set contrasts
-designMat = sparse.model.matrix(
-  modelFormula,
-  temp_df,
-  contrasts = setNames(
-    list(contr_groupSum(group_sizes), contr.sum),
-    c(TIME_ID_NAME, LINE_ID_NAME)
-  )
-)  
-# get every date in each group used to fit the model, this excludes the last date in each group (which should be sum2zero encoded)
-timeFE_columns = levels(temp_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
-# append the group ID to the end of these columns
-timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
-# rename columns of design matrix, assuming that the first T are the intercept and the time fixed effects
-# colnames(designMat)[1:sum(group_sizes)] = c("(Intercept)",
-#                                             str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1)),
-#                                             timeFE_columns)
-colnames(designMat)[1:sum(group_sizes)] = c("(Intercept)",
-                                            if (length(group_sizes) > 1) str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1)) else NULL,
-                                            timeFE_columns)
+group_sizes = rv_df %>%
+  group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
+  summarize(size = n()/L_) %>%
+  pull(size)
 
-# responses
-responses = temp_df[[RESPONSE]]
+# time fixed effects encoding matrix
+S_time = cbind(
+  bdiag(lapply(group_sizes, function(n) rep(1, n))) %*% contr.sum(length(group_sizes)),
+  bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+)
+# time fixed effects design matrix
+X_time = kronecker(rep(1,L_), S_time)
+
+# design matrix for the line fixed effects
+X_line = kronecker( contr.sum(L_, sparse = T), rep(1,T_) )
+
+# design matrix for the covariates
+X_covar = sparse.model.matrix(modelFormula,rv_df) 
+
+# create full design matrix
+designMat = cbind(rep(1,L_*T_),X_time,X_line,X_covar)
+
+rm(X_time,X_line,X_covar)
 
 ## fit model
 
 # fit the linear model using all data
 fit_lm = sparseLM(designMat, responses)
 
-## get time FE results
+## get cleaned RVs
 
 # initialize 0's in the linear operator
 linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
 # matrix for estimating the cleaned RV
-linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+
 # covariance matrix of model parameters
 cov_mat = fit_lm$var_beta_hat
+
 # dataframe of date's cleaned rv
 cleanRV_df = data.frame(
   timeID = as.Date(timeIDs)
 )
-# find the mle estimate, var, and se for the intercept plus alpha
+# find the mle estiamte, var, and se for the intercept plus alpha
 cleanRV_df$estimate = (linear_op_mat %*% fit_lm$beta_hat[,1] )[,1]
 cleanRV_covar = linear_op_mat %*% cov_mat %*% t(linear_op_mat)
 cleanRV_df$var = diag( cleanRV_covar )
 cleanRV_df$se = sqrt(cleanRV_df$var)
-# find rmse of the clean RV, comparing the cleaned RV to zero
-RMSE = rmse_t(0,cleanRV_df$estimate)
+# find rmse of the clean RV (wrt to 0 as opposed to any )
+RMSE = rmse_t(0, cleanRV_df$estimate)
+
+## save fit
 
 saveRDS(list(designMat = designMat,
              responses = responses,
-             df = temp_df,
-             timeGroup_ids = timeGroup_ids,
+             df = rv_df,
+             group_sizes = group_sizes,
              modelFormula = modelFormula,
              covariateNames = covariateNames,
              fit_lm = fit_lm,

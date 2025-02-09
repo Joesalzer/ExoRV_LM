@@ -8,7 +8,7 @@ args = commandArgs(trailingOnly = TRUE)
 
 # model name
 MODEL_NAME = args[1]
-BATCH_SIZES = args[2]
+BATCH_SIZES = as.numeric(args[2])
 
 ## USER DEFINED VARS ##
 # working directory with the data
