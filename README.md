@@ -1,20 +1,20 @@
 file: readSpectra.R <br>
-	 -r script that contains helper functions for use throughout this project
+> r script that contains helper functions for use throughout this project
 
 file: clean_data.Rmd <br>
-	-Uses the directory "line_property_files" to join all of the absorption line data together. The output is completeLines.csv, which is a data file for every line's shape properties, line-specific information, and contaminated radial velocity. This script also provides some summary information and checks of individual lines (like lines that have constant b1 and width). Some lines and days are removed from the analysis (and some lines failed to be read-in) as specified in the paper. Projected HG coefficients are also calculated, reading in the file project_template/project_template_deriv_onto_gh.h5
+> Uses the directory "line_property_files" to join all of the absorption line data together. The output is completeLines.csv, which is a data file for every line's shape properties, line-specific information, and contaminated radial velocity. This script also provides some summary information and checks of individual lines (like lines that have constant b1 and width). Some lines and days are removed from the analysis (and some lines failed to be read-in) as specified in the paper. Projected HG coefficients are also calculated, reading in the file project_template/project_template_deriv_onto_gh.h5
 	
 file: eda.Rmd <br>
-    EDA for this project, includes visuals before models were fit. This file creates some of the figures from the paper: the heatmaps (figure 1) and the RV/depth of select lines (figure 2)
+> EDA for this project, includes visuals before models were fit. This file creates some of the figures from the paper: the heatmaps (figure 1) and the RV/depth of select lines (figure 2)
 
 file: pcaRV.Rmd <br>
-    This file does PCA on the RV time series of lines. This was a preliminary analysis that revealed that around 250 of the analyzed absorption lines had a bias before and after the fire.
+> This file does PCA on the RV time series of lines. This was a preliminary analysis that revealed that around 250 of the analyzed absorption lines had a bias before and after the fire.
 
 file: modeling.Rmd <br>
-    Testing grounds for all of our modeling, including the full-data analysis, bootstrap, and cv. This script includes the fitting of the Common Slopes and Full Model w/ LASSO.
+> Testing grounds for all of our modeling, including the full-data analysis, bootstrap, and cv. This script includes the fitting of the Common Slopes and Full Model w/ LASSO.
 
 file: results.Rmd <br>
-    Provides some key results from the full-data analysis, bootstrap, and cv along with visuals for after the modeling was done
+> Provides some key results from the full-data analysis, bootstrap, and cv along with visuals for after the modeling was done
 		
 file: rv_lm.R <br>
 > Fit a two-way fixed effects linear model, with options to include covariates and which csv file to be used.
