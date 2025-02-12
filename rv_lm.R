@@ -104,10 +104,14 @@ group_sizes = rv_df %>%
   pull(size)
 
 # time fixed effects encoding matrix
-S_time = cbind(
-  bdiag(lapply(group_sizes, function(n) rep(1, n))) %*% contr.sum(length(group_sizes)),
-  bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
-)
+if (length(group_sizes) > 1) {
+  S_time = cbind(
+    bdiag(lapply(group_sizes, function(n) rep(1, n))) %*% contr.sum(length(group_sizes)),
+    bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+  )
+} else {
+  S_time = contr.sum(group_sizes)
+}
 # time fixed effects design matrix
 X_time = kronecker(rep(1,L_), S_time)
 

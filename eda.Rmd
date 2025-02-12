@@ -217,6 +217,71 @@ print(final_plot)
 rm(allLinesHeat_plt, rvLim, plotDF, plotDF_adjusted,allLinesHeat_plt_adjusted,final_plot)
 ```
 
+
+```{r}
+# rv limit of plot
+rvLim = 40
+
+# data frame of the plot, get number of observations removed from plot
+plotDF = completeLines_df %>%
+  mutate(date = as.factor(date)) %>%
+  filter(abs(rv_template_0.5) < rvLim)
+cat(nrow(completeLines_df) - nrow(plotDF), "removed observations\n")
+cat( 100*(nrow(completeLines_df) - nrow(plotDF))/nrow(completeLines_df), "percent removed\n" )
+cat(L_, "total lineIDs\n")
+
+# non-adjusted rv plot
+allLinesHeat_plt = plotDF %>%
+  ggplot() +
+  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 90  ) +
+  geom_vline(xintercept = "2022-12-06", alpha = .5, linewidth=1) +
+  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,100)) +
+  labs(x = "Chronologically-Ordered Days",
+       y = "RV (m/s)",
+       fill = "# of lines") +
+  ylim(-rvLim - 1, rvLim + 1) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title=element_text(size=20))
+
+print(allLinesHeat_plt)
+ggsave(filename = "visuals/heatmapRV_pre.png", width = 9, height = 3.6531, units = "in")
+
+
+# get a df of the adjusted RV (ie centered by the date group and lineID)
+plotDF_adjusted = completeLines_df %>%
+  group_by(date_groups, line_order) %>%
+  mutate(rv_template_0.5 = rv_template_0.5 - mean(rv_template_0.5)) %>%
+  ungroup() %>%
+  mutate(date = as.factor(date)) %>%
+  filter(abs(rv_template_0.5) < rvLim)
+cat(nrow(completeLines_df) - nrow(plotDF_adjusted), "removed observations\n")
+cat( 100*(nrow(completeLines_df) - nrow(plotDF_adjusted))/nrow(completeLines_df), "percent removed\n" )
+cat(L_, "total lineIDs\n")
+
+allLinesHeat_plt_adjusted = plotDF_adjusted %>%
+  ggplot() +
+  geom_bin2d(mapping = aes(x = date, y = rv_template_0.5), bins = 90  ) +
+  geom_vline(xintercept = "2022-12-06", alpha = .5, linewidth=1) +
+  scale_fill_gradient(low="orange",high="blue", trans="log10",limits = c(1,100)) +
+  labs(x = "Chronologically-Ordered Days",
+       y = "RV (m/s)",
+       fill = "# of lines") +
+  ylim(-rvLim - 1, rvLim + 1) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title=element_text(size=20))
+
+print(allLinesHeat_plt_adjusted)
+ggsave(filename = "visuals/heatmapRV_post.png", width = 9, height = 3.6531, units = "in")
+
+rm(allLinesHeat_plt, rvLim, plotDF, plotDF_adjusted,allLinesHeat_plt_adjusted,final_plot)
+```
+
+
+
 # visual of absorption lines
 
 ```{r}
@@ -336,6 +401,26 @@ plt1 = ggplot() +
   ylab("flux")
 plt1
 ggsave("visuals/example_absorptionLine.png")
+```
+
+
+```{r}
+plt1 = ggplot() +
+  geom_line(mapping = aes(x = ref_wavelengths, y = ref_fluxs), color = "black", linewidth = .9, alpha = .8) +
+  theme_classic() +
+  theme(
+    axis.title=element_text(size=25),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    plot.title = element_text(hjust = 0.5, size = 25)
+  ) +
+  ggtitle("") +
+  ylim(y_lims) +
+  xlab("wavelength") +
+  ylab("flux")
+plt1
+ggsave("visuals/example_absorptionLine2.png")
 ```
 
 # example planet signal

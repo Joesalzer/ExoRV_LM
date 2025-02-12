@@ -38,7 +38,7 @@ TIMEGROUP_ID_NAME = "date_groups"
 ```
 
 ```{r}
-model_name = "LASSO"
+model_name = "Gauss=all_HG=all"
 ```
 
 *Options for model name:*
@@ -53,7 +53,7 @@ LASSO (Full Model w/ LASSO)
 # fit results
 
 ```{r}
-model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model_BIC.rds" ))
+model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model.rds" ))
 
 # get the lm fit and dataframe
 designMat = model_fit$designMat
@@ -63,7 +63,7 @@ group_sizes = model_fit$group_sizes
 modelFormula = model_fit$modelFormula
 covariates = model_fit$covariates
 fit_lm = model_fit$fit_lm
-leverages = model_fit$leverages
+#leverages = readRDS(str_c(wd_data, "models/", model_name, "/leverages.rds" ))
 RMSE = model_fit$RMSE
 ```
 
@@ -119,6 +119,11 @@ cat(model_name, "&",
     )
 ```
 
+BF
+Gauss=all_HG=all & 11896 & $6.604 \times 10^5$ & $7.803 \times 10^5$ & 6.279 & 0.578 \\
+AF
+Gauss=all_HG=all & 11772 & $2.812 \times 10^5$ & $3.906 \times 10^5$ & 5.405 & 0.461 \\
+
 ## diagnostic plots
 
 rv effect plot
@@ -126,7 +131,6 @@ rv effect plot
 ```{r}
 ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
   geom_point(mapping = aes(y = cleanRV_df$estimate), size = 1.2) +
-  #geom_errorbar(mapping = aes(ymin = cleanRV_df$lowerSE_MLE, ymax = cleanRV_df$upperSE_MLE), color = "black",linewidth = 1) +
   geom_hline(yintercept = 0, color = "red") +
   ylab("Cleaned RV") +
   xlab("Date") +
@@ -280,7 +284,6 @@ comparing our alpha hats to the (offset) true signal produces the same rmse as t
 rmse_t(c = 0, v = true_rv_df$alpha_hat - true_rv_df$true_rv_offsetGroup)
 ```
 
-
 ```{r}
 ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
   geom_point(mapping = aes(y = cleanRV_df$estimate), size = .7) +
@@ -362,7 +365,7 @@ ggsave("visuals/cleanRV.pdf", width = 10, height = 5)
 # bootstrap results
 
 ```{r}
-bootName = "/wild_bootstrapsBLOCK=byLine"
+bootName = "/wild_bootstraps"
 
 boot_files = list.files( str_c(wd_data, "models/", model_name, bootName) )
 coef_list = list()
@@ -380,12 +383,19 @@ rm(coef_boot, boot_files, coef_list, bootName)
 
 ```{r}
 # get group sizes
-group_sizes = table(model_fit$timeGroup_ids[[TIMEGROUP_ID_NAME]])
+group_sizes = rv_df %>%
+  group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
+  summarize(size = n()/L_) %>%
+  pull(size)
 
 # initialize 0's in the linear operator
 linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
 # matrix for estimating the cleaned RV
-linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+```
+
+```{r}
+coef_boot_df[1:5,1:5]
 ```
 
 ```{r}
@@ -698,6 +708,69 @@ coverage_df %>%
 
 
 # cross validation
+
+```{r}
+cvNames = c("LOODCV","LOOWCV","LOOMCV")
+modelNames = c("Gauss=all_HG=all")
+
+# empty list for creating data frame
+cv_df = data.frame()
+
+for (cvName in cvNames) {
+  for (modelName in modelNames) {
+    # list of files
+    cv_files = list.files( str_c(wd_data, "models/", modelName, "/", cvName) )
+    # empty list for creating data frame
+    cv_list = list()
+    # time ID
+    timeIDs = rep(NA,length(cv_files))
+    # initialize cleaned RV's and standard errors 
+    rv_decontam = rep(NA, length(timeIDs))
+    se_decontam = rep(NA, length(timeIDs))
+  
+    for ( i in 1:length(cv_files) ) {
+      # day that we'll test on
+      test_day = str_sub(str_split_fixed(cv_files, "_",3)[i,3],end = -5)
+      timeIDs[i] = test_day
+      
+      # the entire test set df
+      testset_df = readRDS( str_c(wd_data, "models/", modelName, "/", cvName, "/", cv_files[i] ) )$testDF
+      # grab the test day from the validation set 
+      decontamRV = testset_df %>%
+        filter(date == test_day) %>%
+        mutate(cleaned_rv = contam_rv - pred_rv) %>%
+        pull(cleaned_rv)
+      
+      # get the cleaned RV and se
+      rv_decontam[i] = mean(decontamRV)
+      se_decontam[i] = sd(decontamRV)
+
+      
+      rm(test_day,testset_df)
+    }
+    
+    cv_df = rbind(cv_df,
+                  data.frame(date = timeIDs,
+                             decontamRV = rv_decontam,
+                             seRV = se_decontam,
+                             modelID = modelName,
+                             cv_procedure = cvName
+                             )
+                  )
+    
+    #print(tail(cv_df))
+
+  }
+}
+```
+
+```{r}
+cv_df
+```
+
+
+
+
 
 ```{r}
 cvNames = c("LOODCV","LOOWCV","LOOMCV")

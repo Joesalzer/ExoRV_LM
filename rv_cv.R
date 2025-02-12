@@ -21,8 +21,6 @@ RESPONSE = "rv_template_0.5"
 TIME_ID_NAME = "date"
 LINE_ID_NAME = "line_order"
 TIMEGROUP_ID_NAME = "date_groups"
-## USER DEFINED VARS ##
-
 # read in the model fit
 model_fit = readRDS(str_c(WD_DATA, "models/", MODEL_NAME, "/model.rds" ))
 df = model_fit$df
@@ -33,19 +31,20 @@ modelFormula = model_fit$modelFormula
 lineIDs = df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
 # vec of timeIDs in completeLines_df
 timeIDs = as.Date(df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME)))
+
 T_ = length(timeIDs)
 L_ = length(lineIDs)
 
 # create directory called "cv" in working directory
-if ( !dir.exists(str_c(WD_DATA,"models/",MODEL_NAME,"/cv")) ) {
-  dir.create(str_c(WD_DATA,"models/",MODEL_NAME,"/cv"))
+if ( !dir.exists(str_c(WD_DATA,"models/",MODEL_NAME,"/cv_block=",2*CV_NUM_DAYS)) ) {
+  dir.create(str_c(WD_DATA,"models/",MODEL_NAME,"/cv_block=",2*CV_NUM_DAYS))
 }
 
 # list of timeIDs to be left out
 left_out_timeIDs = create_sliding_windows(timeIDs, CV_NUM_DAYS)
 
-## CV in parallel ##
 cv_parallel = function(i) {
+  
   # get the test set and which day we evaluate on
   test_set = i$test_set
   test_day = i$test_day
@@ -68,79 +67,69 @@ cv_parallel = function(i) {
     arrange(!!sym(LINE_ID_NAME), as.Date(!!sym(TIME_ID_NAME)))
   
   # get group sizes
-  timeGroup_ids = train_df %>%
-    dplyr::select(!!sym(TIMEGROUP_ID_NAME), !!sym(TIME_ID_NAME)) %>%
-    unique()
-  group_sizes = table(timeGroup_ids[[TIMEGROUP_ID_NAME]])
+  group_sizes_train = train_df %>%
+    group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
+    summarize(size = n()/L_) %>%
+    pull(size)
+  group_sizes = df %>%
+    group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
+    summarize(size = n()/L_) %>%
+    pull(size)
   
-  # get which date groups are in the testing set
-  test_df = test_df %>%
-    mutate(!!TIMEGROUP_ID_NAME := factor(!!sym(TIMEGROUP_ID_NAME), levels = names(group_sizes) ) )
+  # time fixed effects encoding matrix
+  if (length(group_sizes_train) > 1) {
+    S_time = cbind(
+      bdiag(lapply(group_sizes_train, function(n) rep(1, n))) %*% contr.sum(length(group_sizes_train)),
+      bdiag(lapply(group_sizes_train, function(n) contr.sum(n) ))
+    )
+  } else {
+    S_time = contr.sum(group_sizes_train)
+  }
+  # time fixed effects design matrix
+  X_train_time = kronecker(rep(1,L_), S_time)
+  # design matrix for the line fixed effects
+  X_train_line = kronecker( contr.sum(L_, sparse = T), rep(1,T_-length(test_set)) )
+  # design matrix for the covariates
+  X_train_covar = sparse.model.matrix(modelFormula,train_df) 
+  # create full design matrix
+  X_train = cbind(rep(1,nrow(X_train_time)),X_train_time,X_train_line,X_train_covar)
   
-  # (sparse) design matrix for model, set contrasts
-  X_train = sparse.model.matrix(modelFormula,
-                                train_df,
-                                contrasts = setNames(
-                                  list(contr_groupSum(group_sizes), contr.sum),
-                                  c(TIME_ID_NAME, LINE_ID_NAME)
-                                )
-  )  
+  rm(X_train_time, X_train_line, X_train_covar)
+  
   # responses
   Y_train = train_df[[RESPONSE]]
   
-  # get every date in each group used to fit the model, this excludes the last date in each group (which should be sum2zero encoded)
-  timeFE_columns = levels(train_df[[TIME_ID_NAME]])[-cumsum(group_sizes)]
-  # append the group ID to the end of these columns
-  timeFE_columns = str_c(timeFE_columns, "_group", rep( 1:length(group_sizes), group_sizes-1 ) )
-  # rename columns of design matrix
-  colnames(X_train)[1:sum(group_sizes)] = c("(Intercept)",
-                                            if (length(group_sizes) > 1) {
-                                              str_c(TIMEGROUP_ID_NAME,seq(1, length(group_sizes)-1))
-                                            } else { NULL },
-                                            timeFE_columns)
+  # fit the linear model using all data
+  fit_lm = sparseLM(X_train, Y_train)
   
-  print("finished making training set")
   
-  # fit the linear model on the train data
-  fit_train_lm = sparseLM(X_train, Y_train, PRINT_TIME = F)
+  # get the group-offset encoding for the test set test set based on time point
+  g_t = (bdiag(lapply(group_sizes, function(n) rep(1, n))) %*% contr.sum(length(group_sizes)))[(timeIDs %in% test_set),]
+  S_test_time = cbind(g_t, Matrix(0, nrow = length(test_set), ncol=sum(group_sizes_train) - length(group_sizes_train) ) )
+  X_test_time = kronecker(rep(1,L_), S_test_time)
   
-  if ( is.null(fit_train_lm) ) {
-    cat("cv failed, singular XtX\n")
-    return()
-  }
-  
-  print("finished fitting model")
-  
-  # (sparse) design matrix for model, without date
-  X_test = sparse.model.matrix(
-    update(modelFormula, as.formula(paste("~", TIMEGROUP_ID_NAME, "+ . - ",TIME_ID_NAME))),
-    test_df,
-    contrasts = setNames(list(contr.sum, contr.sum), c(TIMEGROUP_ID_NAME, LINE_ID_NAME)))  
+  # design matrix for the line fixed effects
+  X_test_line = kronecker( contr.sum(L_, sparse = T), rep(1,length(test_set)) )
+  # design matrix for the covariates
+  X_test_covar = sparse.model.matrix(modelFormula,test_df) 
+  # create full design matrix
+  X_test = cbind(rep(1,nrow(X_test_covar)),X_test_time,X_test_line,X_test_covar)
   # responses
   Y_test = test_df[[RESPONSE]]
   
-  # get rid of model coefficients associated with date terms (alpha)
-  model_coefs_nodate = fit_train_lm$beta_hat[  !grepl("^\\d{4}-\\d{2}-\\d{2}", rownames(fit_train_lm$beta_hat)), ]
-  
-  # make sure our design matrix and coefficients are the same
-  if (!all( names(model_coefs_nodate) == colnames( X_test ) )) {
-    cat("error in conforming matrices\n")
-    return()
-  }
+  rm(X_test_time, X_test_line, X_test_covar)
   
   # create a column for predicted rvs
-  test_df[["pred_rv"]] = (X_test %*% model_coefs_nodate)[,1] 
+  test_df[["pred_rv"]] = (X_test %*% fit_lm$beta_hat)[,1]
   
-  # create a column for predicted rvs, subtracting mean RV intercept term (mu)
-  #test_df[["pred_rv"]] = (X_test %*% model_coefs_nodate)[,1] - model_coefs_nodate[1]
   
   # store data
   saveRDS(
     list(testDF = test_df %>%
            rename(contam_rv = !!sym(RESPONSE) ) %>%
            select(!!sym(TIME_ID_NAME), !!sym(LINE_ID_NAME), contam_rv, pred_rv),
-         model_coefs = model_coefs_nodate),
-    file = str_c(WD_DATA, "models/", MODEL_NAME, "/cv/cv_df_", test_day, ".rds" ) 
+         model_coefs = fit_lm$beta_hat[,1]),
+    file = str_c(WD_DATA, "models/", MODEL_NAME, "/cv_block=",2*CV_NUM_DAYS,"/cv_df_", test_day, ".rds" ) 
   )
   
 }

@@ -65,6 +65,18 @@ result <- pbmclapply(batches, FUN = compute_leverage_batches, mc.cores = 7)
 
 ## code below adds leverages to the model.rds, but produced some errors ##
 
+# get the list of all .rds files in the leverage directory
+leverage_files = list.files(path = leverage_dir, pattern = "\\.rds$", full.names = TRUE)
+# initialize an empty vector to store the combined leverage values
+leverages = vector()
+for (file in leverage_files) {
+  leverages = c(leverages, readRDS(file))
+}
+rm(leverage_files)
+# save combined leverages
+saveRDS(leverages,
+        str_c(WD_DATA, "models/", MODEL_NAME, "/leverages.rds" ))
+
 # # get the list of all .rds files in the leverage directory
 # leverage_files = list.files(path = leverage_dir, pattern = "\\.rds$", full.names = TRUE)
 # # initialize an empty vector to store the combined leverage values
