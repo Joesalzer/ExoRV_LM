@@ -711,7 +711,7 @@ coverage_df %>%
 
 ```{r}
 cvNames = c("LOODCV","LOOWCV","LOOMCV")
-modelNames = c("Gauss=all_HG=all")
+modelNames = c("TWFE","Gauss=all_HG=all")
 
 # empty list for creating data frame
 cv_df = data.frame()
@@ -764,9 +764,6 @@ for (cvName in cvNames) {
 }
 ```
 
-```{r}
-cv_df
-```
 
 
 
