@@ -3,7 +3,7 @@ This repository includes code and summaries corresponding to the paper "Searchin
 The code uses R (https://www.r-project.org/) and assumes you have installed the following packages:
 tidyverse, rhdf5, Matrix, patchwork, collapse, parallel, pbmcapply
 
-Data used for this paper can be found at: 10.5281/zenodo.14841435
+Data used for this paper can be found at: https://doi.org/10.5281/zenodo.14841436
 
 If you come across any issues or bugs, please contact Joseph Salzer at jsalzer@wisc.edu.
 
