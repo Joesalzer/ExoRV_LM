@@ -1,9 +1,9 @@
-This repository includes code, data, and summaries corresponding to the paper "Searching for Low-Mass Exoplanets Amid Stellar Variability with a Fixed Effects Linear Model of Line-by-Line Shape Changes".
+This repository includes code and summaries corresponding to the paper "Searching for Low-Mass Exoplanets Amid Stellar Variability with a Fixed Effects Linear Model of Line-by-Line Shape Changes".
 
 The code uses R (https://www.r-project.org/) and assumes you have installed the following packages:
 tidyverse, rhdf5, Matrix, patchwork, collapse, parallel, pbmcapply
 
-Data used for this paper can be found at: ZENODO LINK. 
+Data used for this paper can be found at: 10.5281/zenodo.14841435
 
 If you come across any issues or bugs, please contact Joseph Salzer at jsalzer@wisc.edu.
 
@@ -35,7 +35,7 @@ file: rv_cv.R <br>
 > This script has some variables that need to be set by the user (such as the working directory, what the response column is called, what the time column is called, etc.) inside a block with the heading "## variables to be set by the user ##". 
 
 file: clean_data.Rmd <br>
-> This markdown file uses the directory "line_property_files" to join all of the absorption line data together. The output is completeLines.csv, which is a data file for every line's shape properties, line-specific information, and contaminated radial velocity. This script also provides some summary information and checks of individual lines (like lines that have constant b1 and width). Some lines and days are removed from the analysis (and some lines failed to be read-in) as specified in the paper. Projected HG coefficients are also calculated, reading in the file project_template/project_template_deriv_onto_gh.h5
+> This markdown file uses the directory "line_property_files" to join all of the absorption line data together. The output is completeLines.csv, which is a data file for every line's shape properties, line-specific information, and contaminated radial velocity. This script also provides some summary information and checks of individual lines (like lines that have constant b1 and width). Some lines and days are removed from the analysis (and some lines failed to be read-in) as specified in the paper. Projected HG coefficients are also calculated, reading in the file project_template_deriv_onto_gh.h5
 	
 file: eda.Rmd <br>
 > This markdown file contains the EDA for this project, including visuals before models were fit. This file creates some of the figures from the paper: the heatmaps (figure 1) and the RV/depth of select lines (figure 2)

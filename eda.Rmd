@@ -106,40 +106,40 @@ plot_df = completeLines_df %>%
 ```{r}
 rv_time_plt = plot_df %>%
   ggplot() +
-  geom_point(mapping = aes(x = date, y = rv_template_0.5, color = date), size = .8, alpha = .87) +
+  geom_point(mapping = aes(x = date, y = rv_template_0.5, color = date), size = .2, alpha = .87) +
   xlab("Date") +
   ylab("RV (m/s)") +
   facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
   theme_bw() + 
   guides(color="none") +
   scale_color_viridis_c() +
-  theme(axis.text = element_text(size = 12),
-        axis.title = element_text(size = 20),
-        strip.text.x = element_text(size = 15) )
+  theme(axis.text = element_text(size = 5),
+        axis.title = element_text(size = 12),
+        strip.text.x = element_text(size = 8) )
 depth_time_plt = plot_df %>%
   ggplot() +
-  geom_point(mapping = aes(x = date, y = change_depth, color = date ), size = .8, alpha = .87) +
+  geom_point(mapping = aes(x = date, y = change_depth, color = date ), size = .2, alpha = .87) +
   guides(color="none") +
   xlab("Date") +
   ylab("Change in Depth") +
   facet_wrap(vars(lineID), nrow = 1, scales = "fixed") +
   theme_bw() +
   theme(strip.text.x = element_blank(),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 20)) + 
+        axis.text = element_text(size = 5),
+        axis.title = element_text(size = 12)) + 
   guides(color="none") +
   scale_color_viridis_c()
 rv_depth_plt = plot_df %>%
   ggplot() +
-  geom_point(mapping = aes(x = change_depth, y = rv_template_0.5, color = date ), size = .8, alpha = .87) +
+  geom_point(mapping = aes(x = change_depth, y = rv_template_0.5, color = date ), size = .2, alpha = .87) +
   guides(color="none") +
   xlab("Change in Depth") +
   ylab("RV (m/s)") +
   facet_wrap(vars(lineID), nrow = 1, scales = "free") +
   theme_bw() +
   theme(strip.text.x = element_blank(),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 20))+ 
+        axis.text = element_text(size = 5),
+        axis.title = element_text(size = 12))+ 
   guides(color="none") +
   scale_color_viridis_c()
 
@@ -147,7 +147,10 @@ final_plot = rv_time_plt/depth_time_plt/rv_depth_plt
 
 # print the final arrangement
 print(final_plot)
-ggsave("visuals/fourLinesRV.pdf", width = 13, height = 10)
+
+
+ggsave("visuals/fourLinesRV.pdf", width = 7, height = 5, dpi = 300)
+
 ``` 
 
 ```{r}
@@ -181,7 +184,8 @@ allLinesHeat_plt = plotDF %>%
   theme_bw() +
   theme(axis.text.x = element_blank(),
         axis.ticks.x = element_blank(),
-        axis.title=element_text(size=20))
+        axis.title=element_text(size=12)) +
+  guides(fill = guide_colorbar(barwidth = 10, barheight = .5))
 
 # get a df of the adjusted RV (ie centered by the date group and lineID)
 plotDF_adjusted = completeLines_df %>%
@@ -206,13 +210,14 @@ allLinesHeat_plt_adjusted = plotDF_adjusted %>%
   theme_bw() +
   theme(axis.text.x = element_blank(),
         axis.ticks.x = element_blank(),
-        axis.title=element_text(size=20))
+        axis.title=element_text(size=12)) +
+  guides(fill = guide_colorbar(barwidth = 10, barheight = .5))
 
 final_plot = (allLinesHeat_plt / allLinesHeat_plt_adjusted) + plot_layout(guides = 'collect') &
-  theme(legend.position='bottom', legend.title=element_text(size=15))
+  theme(legend.position='bottom', legend.title=element_text(size=8))
 print(final_plot)
 
-#ggsave(filename = "visuals/heatmapRV_combined.pdf", width = 10, height = 7, units = "in")
+ggsave(filename = "visuals/heatmapRV_combined.pdf", width = 7, height = 5, dpi = 300)
 
 rm(allLinesHeat_plt, rvLim, plotDF, plotDF_adjusted,allLinesHeat_plt_adjusted,final_plot)
 ```

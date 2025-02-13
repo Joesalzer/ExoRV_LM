@@ -28,7 +28,7 @@ files = list.files("line_property_files", pattern = ".h5")
 
 ```{r}
 # file with the projection onto gh coefs that are orthogonal to a Doppler shift
-template_deriv_onto_gh = H5Fopen("project_template/project_template_deriv_onto_gh.h5")
+template_deriv_onto_gh = H5Fopen("project_template_deriv_onto_gh.h5")
 ```
 
 ```{r}
