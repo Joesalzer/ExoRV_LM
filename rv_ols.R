@@ -134,7 +134,7 @@ fit_lm = sparseLM(designMat, responses)
 ## get cleaned RVs
 
 # initialize 0's in the linear operator
-linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat), sparse = T )
 # matrix for estimating the cleaned RV
 linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
 
@@ -157,7 +157,7 @@ RMSE = rmse_t(0, cleanRV_df$estimate)
 
 saveRDS(list(designMat = designMat,
              responses = responses,
-             df = rv_df,
+             df = completeLines_df,
              group_sizes = group_sizes,
              modelFormula = modelFormula,
              covariateNames = covariateNames,

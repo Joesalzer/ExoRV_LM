@@ -10,7 +10,7 @@ args = commandArgs(trailingOnly = TRUE)
 MODEL_NAME = args[1]
 # number of timeIDs in each leave-one-out cv
 CV_NUM_DAYS = as.numeric(args[2])
-print(CV_NUM_DAYS)
+print( str_c("Number of days in validation set (not including central day): ", 2*CV_NUM_DAYS) )
 
 ## USER DEFINED VARS ##
 # working directory with the data
@@ -42,6 +42,44 @@ if ( !dir.exists(str_c(WD_DATA,"models/",MODEL_NAME,"/cv_block=",2*CV_NUM_DAYS))
 
 # list of timeIDs to be left out
 left_out_timeIDs = create_sliding_windows(timeIDs, CV_NUM_DAYS)
+
+## IRLS algorithm ##
+IRLS = function(rse_tol = 2e-05,
+                max.iter = 10,
+                X = designMat,
+                Y = responses,
+                df = completeLines_df,
+                lineIDname = LINE_ID_NAME) {
+  ## initialize equal weights ##
+  iter = 1
+  # weight vector
+  w_irls = rep(1, nrow(X))
+  wls_fit = sparseWLM(X, Y, w_irls)
+  # rse for each iteration
+  rse_iter = list()
+  rse_iter[[1]] = 0
+  rse_iter[[2]] = wls_fit$RSE
+  
+  while( (iter < max.iter) & ( abs(rse_iter[[iter+1]] - rse_iter[[iter]])>rse_tol) ) {
+    iter = iter + 1
+    # re-weight line-by-line, update weight vector
+    w_irls = df %>%
+      mutate(r = wls_fit$resid[,1]) %>%
+      group_by(!!sym(lineIDname)) %>%
+      mutate(sar = sum(abs(r)),
+             w = 1/sar) %>%
+      ungroup() %>%
+      pull(w)
+    w_irls = w_irls/sum(w_irls)
+    # fit new model
+    wls_fit = sparseWLM(X, Y, w_irls)
+    rse_iter[[iter + 1]] = wls_fit$RSE
+    #print(iter)
+  }
+  cat("iter: ", iter, " diff RSE: ", rse_iter[[iter+1]] - rse_iter[[iter]], "\n")
+  return(list(fit_lm = wls_fit,
+              weights = w_irls) )
+}
 
 cv_parallel = function(i) {
   
@@ -94,14 +132,26 @@ cv_parallel = function(i) {
   # create full design matrix
   X_train = cbind(rep(1,nrow(X_train_time)),X_train_time,X_train_line,X_train_covar)
   
+  if ( startsWith(MODEL_NAME,"LASSO")  ) {
+    # get names of columns that are remvoed by lasso
+    lasso_removed_names = names(model_fit$lasso_zero_columns[model_fit$lasso_zero_columns])
+    # remove LASSO columns
+    X_train = X_train[, !(colnames(X_train) %in% lasso_removed_names)]
+  }
   rm(X_train_time, X_train_line, X_train_covar)
   
   # responses
   Y_train = train_df[[RESPONSE]]
   
-  # fit the linear model using all data
-  fit_lm = sparseLM(X_train, Y_train)
-  
+  # fit the linear model using all data, set an appropriate tolerance and maximum number of iterations here
+  irls_results = IRLS(rse_tol = 1e-04, max.iter = 10,
+                      X = X_train, Y = Y_train, df = train_df)
+  fit_lm = irls_results$fit_lm
+  train_weights = train_df %>%
+    mutate(w = irls_results$weights) %>%
+    group_by(!!sym(LINE_ID_NAME)) %>%
+    summarize(weight = mean(w))
+  #train_weights = irls_results$weights
   
   # get the group-offset encoding for the test set test set based on time point
   g_t = (bdiag(lapply(group_sizes, function(n) rep(1, n))) %*% contr.sum(length(group_sizes)))[(timeIDs %in% test_set),]
@@ -117,6 +167,11 @@ cv_parallel = function(i) {
   # responses
   Y_test = test_df[[RESPONSE]]
   
+  if ( startsWith(MODEL_NAME,"LASSO")  ) {
+    # remove LASSO columns
+    X_test = X_test[, !(colnames(X_test) %in% lasso_removed_names)]
+  }
+  
   rm(X_test_time, X_test_line, X_test_covar)
   
   # create a column for predicted rvs
@@ -128,10 +183,12 @@ cv_parallel = function(i) {
     list(testDF = test_df %>%
            rename(contam_rv = !!sym(RESPONSE) ) %>%
            select(!!sym(TIME_ID_NAME), !!sym(LINE_ID_NAME), contam_rv, pred_rv),
-         model_coefs = fit_lm$beta_hat[,1]),
+         model_coefs = fit_lm$beta_hat[,1],
+         train_weights = train_weights),
     file = str_c(WD_DATA, "models/", MODEL_NAME, "/cv_block=",2*CV_NUM_DAYS,"/cv_df_", test_day, ".rds" ) 
   )
   
 }
 
-cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel, mc.cores = 7)
+#cv_parallel(left_out_timeIDs[[1]])
+cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel, mc.cores = 5)

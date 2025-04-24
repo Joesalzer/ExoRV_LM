@@ -98,7 +98,7 @@ loadLineFile = function(line_name, wd_data = "/Users/josephsalzer/research/exost
 # wd_data: working directory
 
 loadLineShape = function(line_name, wd_data = "/Users/josephsalzer/research/exostat/line_property_files/") {
-  
+  print(str_c(wd_data, line_name))
   # open one file
   line.h5 = H5Fopen(str_c(wd_data, line_name))
   # see names, datatype and dim of line.h5
@@ -165,8 +165,90 @@ loadLineShape = function(line_name, wd_data = "/Users/josephsalzer/research/exos
 # test_index - vector of logical for the indices that we would like to split from training data
 # response - string for the response column
 # lineIDname - string for the lineID
+standardize = function(current_df, covariates = NULL, test_index = NULL, train_index = NULL, response = "rv_template_0.5", lineIDname = "line_order") {
+  
+  # if we want to do training and testing, include indices in test_index and this makes a train and test set,
+  # otherwise it just makes a train set of the current df
+  if (!is.null( test_index )) {
+    
+    # if train index is not included, assume everything else is the training df
+    if (is.null(train_index)) {
+      # create training data without test_index
+      train = current_df[!test_index,]
+      # create testing data with test_index
+      test = current_df[test_index,]
+    } else {
+      # create training data of training index
+      train = current_df[train_index,]
+      # create testing data with test_index
+      test = current_df[test_index,]
+    }
 
-standardize = function(current_df, covariates = NULL, test_index = NULL, response = "rv_template_0.5", lineIDname = "line_order") {
+  } else {
+    train = current_df
+  }
+  
+  # if no covariates are included, return original df
+  if (is.null(covariates)) {
+    if (is.null( test_index )) {
+      return( list(train.df = train) )
+    } else {
+      return( list(train.df = train,
+                   test.df = test) )
+    }
+  }
+  
+  ## this section normalizes train data by means and sd of train data ##
+  
+  # get means of our covariates per line (for training days)
+  train_means = train %>%
+    group_by(!!sym(lineIDname)) %>%
+    summarize_at(covariates, mean)%>%
+    rename_at(covariates, ~ paste0(., '_mean'))
+  # get sds of our centered covariates (for training days)
+  train_sds = train %>%
+    group_by(!!sym(lineIDname)) %>%
+    mutate_at(covariates,centerFun) %>%
+    ungroup() %>%
+    summarize_at(covariates,sd)
+  # merge the training shape measurement means by lineIDname
+  train = merge(train, train_means, by = lineIDname)
+  # loop over covariates, centering by the mean
+  for (covar in covariates) {
+    train[[paste0(covar, "_centered")]] = train[[covar]] - train[[paste0(covar, "_mean")]]
+  }
+  # divide by standard deviation of train data
+  train[,str_c(covariates,"_centered")] = train[,str_c(covariates,"_centered")]/train_sds[rep(1,dim(train)[1]),]
+  # drop mean covariates from train data
+  train = train[, !colnames(train) %in% str_c(covariates,"_mean") ]
+  
+  ## if we dont want to do training and testing split, this just returns the train set ##
+  if (is.null( test_index )) {
+    return(list(train.df = train,
+                train_means = train_means,
+                train_sds = train_sds))
+  }
+  
+  ## this section normalizes test data by means and sd of train data ##
+  
+  # merge the training shape measurement means by lineIDname
+  test = merge(test, train_means, by = lineIDname)
+  # loop over covariates, centering by the mean
+  for (covar in covariates) {
+    test[[paste0(covar, "_centered")]] = test[[covar]] - test[[paste0(covar, "_mean")]]
+  }
+  # divide by standard deviation of train data
+  test[,str_c(covariates,"_centered")] = test[,str_c(covariates,"_centered")]/train_sds[rep(1,dim(test)[1]),]
+  # drop mean covariates from test data
+  test = test[, !colnames(test) %in% str_c(covariates,"_mean") ]
+  
+  return(list(train.df = train,
+              test.df = test,
+              train_means = train_means,
+              train_sds = train_sds))
+}
+
+standardize_old = function(current_df, covariates = NULL, test_index = NULL, response = "rv_template_0.5", lineIDname = "line_order") {
   
   # if we want to do training and testing, include indices in test_index and this makes a train and test set,
   # otherwise it just makes a train set of the current df
@@ -310,6 +392,79 @@ sparseLM = function(X, Y, PRINT_TIME = T) {
                 AIC = AIC,
                 BIC = BIC,
                 RSE = RSE))
+}
+
+# returns a list of model fits
+sparseWLM = function(X, Y, w, PRINT_TIME = T) {
+  START_TIME = Sys.time()
+  
+  if (is.null(w)) {
+    w = rep(1/length(Y),length(Y))
+  }
+  # weight matrix
+  W = w*Diagonal(length(w))
+  
+  # get X^T W X
+  XtWX = t(X) %*% W %*% X
+  
+  # get X^T W Y
+  XtWY = t(X) %*% W %*% Y
+  
+  # get (X^T W X)^-1 matrix
+  # ...using cholesky decomp
+  XtWX_inv =  try( chol2inv(Matrix::Cholesky(XtWX)) )
+  
+  # catch error if XtX is singular
+  if (all(class(XtWX_inv) == "try-error") ) {
+    cat("singular XtWX_inv\n")
+    return()
+  }
+  
+  # beta hat, linear model coefficients
+  beta_hat = XtWX_inv %*% XtWY
+  
+  # fitted values and residuals
+  y_hat = X %*% beta_hat
+  resid = Y - y_hat
+  
+  # dimensions
+  p = ncol(X)
+  n = nrow(X)
+  
+  # unweighted metrics
+  
+  # sum of squared residuals
+  SSR = drop(crossprod(resid))
+  
+  # sigma2 hat and variance of beta_hat
+  sigma2_hat = SSR / n 
+  var_beta_hat = sigma2_hat * XtWX_inv 
+  
+  # total sum of squares
+  SST = sum( ( Y - mean(Y) )^2 )
+  # R-squared, AIC, BIC calculations
+  R2 = 1-SSR/SST
+  adj_R2 = 1 - (1- R2)*(n - 1)/(n - p - 1)
+  AIC = n * log(SSR/n) + 2 * p
+  BIC = n * log(SSR/n) + p * log(n)
+  # residual standard errors
+  RSE = sqrt( SSR/(n-p) )
+  
+  if (PRINT_TIME) {
+    print(Sys.time() - START_TIME)
+  }
+  
+  
+  return( list( beta_hat = beta_hat,
+                y_hat = y_hat,
+                resid = resid,
+                sigma2_hat = sigma2_hat,
+                var_beta_hat = var_beta_hat,
+                adj_R2 = adj_R2,
+                AIC = AIC,
+                BIC = BIC,
+                RSE = RSE,
+                eff = 1/sum(w^2)))
 }
 
 ###########################

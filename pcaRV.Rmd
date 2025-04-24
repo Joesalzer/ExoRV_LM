@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 source("/Users/josephsalzer/research/exostat/readSpectra.R")
+library(ggpubr)
 ```
 
 ```{r}
@@ -26,6 +27,30 @@ final_df = read_csv(str_c(wd_data,"completeLines.csv"))
 colnames(final_df)
 ```
 
+
+```{r}
+final_df %>%
+  group_by(line_order) %>%
+  summarize(meanVar = mean(sigma_rv_template_0.5)) %>%
+  summary()
+```
+
+
+For full data: https://zenodo.org/records/14841436. Download completeLines.csv, this should have 256,740 x 96 values.
+
+The important columns are the following:
+  date - (date) The day that a given observation was taken on
+  date_groups - (dbl) An indicator whether a day was taken before a fire (ie before 2022-06-13) or after the fire (ie after 2022-06-13)
+  line_order - (chr) A string that indicates the ID of a line. It indicates the central wavelength of a line followed by the order of the ccd it appears on. CENTRAL WAVELENGTH "_" ORDER
+  rv_template_0.5 - (dbl) This is the estimated RV (with respect to a template) for a given line_order on a given day.
+  sigma_rv_template_0.5 - (dbl) The estimated variance of the RV.
+  
+
+I have also created the following data product: rv_df.rds
+
+This is a dataframe where the first column represents the date, and then each subsequent column represents the RV time series for a particular line.
+
+
 ## get list of wavelengths, lineIDs, and days
 
 ```{r}
@@ -41,26 +66,77 @@ L_ = length(lines)
 
 ## PCA on RV data
 
+rv time series
 ```{r}
 rv_df = final_df %>%
-  select(rv_template_0.5, date, line_order) %>%
+  dplyr::select(rv_template_0.5, date, line_order) %>%
   pivot_wider(names_from = line_order, values_from = rv_template_0.5)
 head(rv_df)
 
 # rv matrix
-rv_mat = rv_df %>% select(!date)
+rv_mat = rv_df %>% dplyr::select(!date)
 ```
+
+other time series
+```{r}
+# rv_df = final_df %>%
+#   select(hg_coeff_0, date, line_order) %>%
+#   pivot_wider(names_from = line_order, values_from = hg_coeff_0)
+# head(rv_df)
+# 
+# # rv matrix
+# rv_mat = rv_df %>% select(!date)
+```
+
+exo_embed, RV
+```{r}
+# pca_df = rv_df %>%
+#   select(rv, date, line_order) %>%
+#   pivot_wider(names_from = line_order, values_from = rv)
+# head(pca_df)
+# 
+# # rv matrix
+# rv_mat = pca_df %>% select(!date)
+```
+
+exo_embed, embedding dimension
+```{r}
+# pca_df = rv_df %>%
+#   select(X1, date, line_order) %>%
+#   pivot_wider(names_from = line_order, values_from = X1)
+# head(pca_df)
+# 
+# # rv matrix
+# rv_mat = pca_df %>% select(!date)
+```
+
 
 *ADDING PLANERTARY SIGNAL IS LIKE ADDING A RANK 1 MATRIX TO OUR LINES*
 
 ```{r}
-# # planetary signal
-# planet_signal = 5*sin( (2*pi/366)*changeFun( as.numeric(rv_df$date) ))
-# # matrix to perturb the original dataframe by
-# planet_mat = planet_signal %*% t(rep(1,L_))
-# # stellar activity plus planet signal
-# RVplanet_mat = rv_mat + planet_mat
+AMP = 3
+PERIOD = 366
+FREQ = 2*pi/PERIOD
+HORIZONTAL_SHIFT = 100
+# planetary signal
+planet_signal = AMP*sin( FREQ*changeFun( as.numeric(rv_df$date) )+ HORIZONTAL_SHIFT)
+# matrix to perturb the original dataframe by
+planet_mat = planet_signal %*% t(rep(1,L_))
+# stellar activity plus planet signal
+rv_planet_mat = rv_mat + planet_mat
 ```
+
+```{r}
+# planet_mat[1:5,1:5]
+# 
+# ggplot() +
+#   geom_point(mapping = aes(x = rv_df$date, y = planet_mat[,1])) +
+#   xlab("date") +
+#   ylab("planetary rv")
+```
+
+
+
 
 *RUN PCA*
 
@@ -68,6 +144,12 @@ rv_mat = rv_df %>% select(!date)
 # run pca with scaling
 rv_pca = prcomp(rv_mat, center = T, scale = T, retx = T)
 ```
+
+```{r}
+# # run pca with scaling
+# rv_pca = prcomp(rv_planet_mat, center = T, scale = T, retx = T)
+```
+
 
 *PCA diagnostics*
 
@@ -82,12 +164,12 @@ sum(var_explained[1:10])
 ```
 
 ```{r}
-ggplot(mapping = aes(x = c(1:length(var_explained)),y = var_explained)) +
+ggplot(mapping = aes(x = c(1:20),y = var_explained[1:20])) +
   geom_line() +
   geom_point() +
   xlab("Principal Component") + 
   ylab("Variance Explained") +
-  xlim(0,50)
+  xlim(0,20)
 ```
 
 ## visuals
@@ -119,7 +201,7 @@ p = ggarrange(plotlist = list(pc1_plot, pc2_plot,
                               pc3_plot, pc4_plot,
                               pc5_plot, pc6_plot), nrow = 3, ncol = 2)
 p
-ggsave("pcScorePlot.pdf", width = 10, height = 5)
+#ggsave("pcScorePlot.png", width = 10, height = 5)
 rm(plot_df,pc1_plot,pc2_plot,pc3_plot,pc4_plot,pc5_plot,pc6_plot)
 ```
 
@@ -176,7 +258,7 @@ p = ggarrange(plotlist = list(pc1_plot, pc2_plot,
                               pc3_plot, pc4_plot,
                               pc5_plot, pc6_plot), nrow = 3, ncol = 2)
 p
-ggsave("pcLoadingPlot.pdf", width = 10, height = 5)
+#ggsave("pcLoadingPlot.png", width = 10, height = 5)
 rm(pc1_plot,pc2_plot,pc3_plot,pc4_plot,pc5_plot,pc6_plot,p)
 ```
 
@@ -191,11 +273,560 @@ summary( abs(pcDir_df$PC1_dir) )
 quantile( abs(pcDir_df$PC1_dir), probs = c(.75,.95,.99) )
 ```
 
+*low PC1 lines*
+```{r}
+pcDir_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = line_order, y = PC4_dir ), size = .5) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+summary( abs(pcDir_df$PC1_dir) )
+quantile( abs(pcDir_df$PC1_dir), probs = c(.75,.95,.99) )
+```
+
+```{r}
+pcDir_df %>%
+  filter( abs(PC4_dir) > 0.1 ) %>%
+  pull(line_order)
+```
+
+
 
 ```{r}
 pcDir_df %>%
   filter( abs(PC1_dir) < 0.04 ) %>%
   pull(line_order) %>%
   saveRDS(file = "lowPC1Lines.rds")
+```
+
+# using pca loadings in lm
+
+```{r}
+# create new df with pc for each line
+pca_df = do.call(rbind, replicate(L_, rv_pca$x[, 1:6], simplify = FALSE))
+pca_df = final_df %>%
+  select(line_order, date, rv_template_0.5) %>%
+  arrange(line_order) %>%
+  cbind(pca_df)
+```
+
+```{r}
+designMat = sparse.model.matrix(~ 0 + line_order + line_order:PC1 + line_order:PC2 + line_order:PC3 + line_order:PC4 + line_order:PC5 + line_order:PC6, data = pca_df)
+responses = pca_df$rv_template_0.5
+fit_lm = sparseLM(designMat, responses)
+```
+
+```{r}
+fit_lm$AIC
+```
+
+```{r}
+fit_lm$AIC
+```
+pc1 = 1669048
+pc2 = 1661591
+pc3 = 1342393
+pc4 = 1335751
+pc5 = 1299521
+pc6 = 1278287
+
+```{r}
+pca_df %>%
+  mutate(resid = fit_lm$resid[,1]) %>%
+  group_by(date) %>%
+  summarize(cleanRV = mean(resid)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = date, y = cleanRV))
+```
+
+```{r}
+pca_df %>%
+  mutate(resid = fit_lm$resid[,1]) %>%
+  group_by(date) %>%
+  summarize(cleanRV = mean(resid)) %>%
+  ungroup() %>%
+  summarize(rmse = sqrt(mean(cleanRV^2)) )
+```
+
+
+
+# experiment
+
+
+```{r}
+# number of observations per individual
+T_ = 300
+# number of individuals
+L_ = 30
+# set the time sampling
+set.seed(123)
+x_grid = runif(n = T_, min = -3, max = 3)
+```
+
+
+```{r}
+# quadradic
+f = function(x) {
+  x^2
+}
+# step function
+g = Vectorize( function(x) {
+  if (x <= 0) {
+    return(-1)
+  } else {
+    return(1)
+  }
+}
+)
+# sin wave
+h = function(x, AMP = 3, FREQ = 2*pi/2) {
+  return( AMP*sin(FREQ*x) )
+}
+```
+
+
+```{r}
+ggplot() +
+  geom_line(mapping = aes(x = x_grid, y = f(x_grid)), color = "blue") +
+  geom_line(mapping = aes(x = x_grid, y = g(x_grid)), color = "orange") +
+  geom_line(mapping = aes(x = x_grid, y = h(x_grid)), color = "black")
+```
+
+```{r}
+# quadradic slopes by line
+f_slopes = rnorm(n = L_, sd = 2)
+# step function slopes by line
+g_slopes = rep(0, L_)
+g_slopes[ceiling(2*L_/3):L_] = runif(n = L_-ceiling(2*L_/3)+1, min = -5, max = 5)
+# noise by line
+noise_line = rep(3,L_)
+```
+
+```{r}
+# initialize incorrect frequency
+freq_k = 3.5
+freq_k
+```
+
+```{r}
+# initialize correct frequency
+freq_k = 2*pi/2
+freq_k
+```
+
+```{r}
+# initialize df
+combinedDF = data.frame()
+for (lineID in 1:L_) {
+  # generate mixture of functions
+  y = f_slopes[lineID]*f(x_grid) + g_slopes[lineID]*g(x_grid) + h(x_grid) 
+  # add normal noise
+  y = y + rnorm(T_, sd = noise_line[lineID])
+  
+  # include misspecified freq here
+  df = data.frame(
+    lineID = lineID,
+    x = x_grid,
+    y = y,
+    h_x = h(x_grid, AMP = 1, FREQ = freq_k)
+  )
+  combinedDF = rbind(combinedDF, df)
+  
+  rm(y, df)
+}
+
+combinedDF = combinedDF %>%
+  arrange(lineID, x) %>%
+  mutate(lineID = factor(lineID))
+```
+
+```{r}
+# initialize amp 
+inti_lm = lm(y ~ 0 + h_x + lineID, data = combinedDF)
+amp_k = inti_lm$coefficients["h_x"]
+amp_k
+```
+
+```{r}
+gradDF = combinedDF %>%
+  select(x,y,lineID) %>%
+  group_by(lineID) %>%
+  mutate(y = y - mean(y)) %>%
+  ungroup()
+gradDF
+```
+
+```{r}
+sgd_sin_fit <- function(df,
+                        a0        = 1.0,    # initial a
+                        omega0    = 1.0,    # initial omega
+                        eta       = 1e-3,   # learning rate
+                        n_epochs  = 1000,   # number of passes over the data
+                        batch_size = 1,      # mini-batch size (1 = true SGD)
+                        verbose   = TRUE    # print loss every so often?
+                        ) {
+  
+  # initialize parameters
+  a     <- a0
+  omega <- omega0
+  N     <- nrow(df)
+  
+  # optional: record loss history
+  loss_hist <- numeric(n_epochs)
+  
+  for (epoch in seq_len(n_epochs)) {
+    # shuffle data indices
+    idx <- sample.int(N)
+    
+    # process mini-batches
+    for (start in seq(1, N, by = batch_size)) {
+      batch_idx <- idx[start:min(start + batch_size - 1, N)]
+      x_batch   <- df$x[batch_idx]
+      y_batch   <- df$y[batch_idx]
+      
+      # predictions and errors
+      preds <- a * sin(omega * x_batch)
+      errs  <- preds - y_batch
+      
+      # gradients (MSE loss)
+      #   ∂/∂a   = (2/n) * sum[ (a sin(ωx) − y) * sin(ωx) ]
+      #   ∂/∂ω   = (2/n) * sum[ (a sin(ωx) − y) * (a x cos(ωx)) ]
+      n_b <- length(x_batch)
+      grad_a     <- (2 / n_b) * sum(errs * sin(omega * x_batch))
+      grad_omega <- (2 / n_b) * sum(errs * (a * x_batch * cos(omega * x_batch)))
+      
+      # parameter update
+      a     <- a     - eta * grad_a
+      omega <- omega - eta * grad_omega
+    }
+    
+    # record full-data loss after this epoch
+    full_preds <- a * sin(omega * df$x)
+    loss_hist[epoch] <- mean((full_preds - df$y)^2)
+    
+    # optional progress
+    if (verbose && (epoch %% (n_epochs / 10) == 0)) {
+      cat(sprintf("Epoch %4d / %4d: loss = %.6f\n",
+                  epoch, n_epochs, loss_hist[epoch]))
+    }
+  }
+  
+  # return final parameters + loss history
+  list(a           = a,
+       omega       = omega,
+       loss_history= loss_hist)
+}
+```
+
+```{r}
+sgdFit = sgd_sin_fit(gradDF, a0 = -0.3078763, omega0 = 10, eta = 1e-3, batch_size = T_)
+```
+
+```{r}
+sgdFit$omega
+sgdFit$a
+plot(sgdFit$loss_history)
+```
+
+
+
+
+```{r}
+# response df w/o subtracting off learned sin-wave
+response_df = combinedDF %>%
+  select(y, x, lineID) %>%
+  pivot_wider(names_from = lineID, values_from = y, names_prefix = "lineID=")
+head(response_df)
+
+# rv matrix
+response_mat = response_df %>% select(!x)
+head(response_mat)
+```
+
+```{r}
+# response df w/ subtracting off learned sin-wave
+response_df = combinedDF %>%
+  mutate(h_x = h(x, FREQ = freq_k, AMP = 1)) %>%
+  mutate(cleaned_y = inti_lm$coefficients["h_x"]*h_x,
+         contam_y = y - cleaned_y) %>%
+  select(contam_y, x, lineID) %>%
+  pivot_wider(names_from = lineID, values_from = contam_y, names_prefix = "lineID=")
+head(response_df)
+# rv matrix
+response_mat = response_df %>% select(!x)
+head(response_mat)
+```
+
+
+*RUN PCA*
+
+```{r}
+# run pca with scaling
+response_pca = prcomp(response_mat, center = T, scale = T, retx = T)
+```
+
+*PCA diagnostics*
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = response_pca$sdev^2 / sum(response_pca$sdev^2)
+head(var_explained)
+```
+
+```{r}
+sum(var_explained[1:10])
+```
+
+```{r}
+ggplot(mapping = aes(x = c(1:10),y = var_explained[1:10])) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  xlim(0,10)
+```
+
+
+```{r}
+# add pc scores to rv_df
+plot_df = cbind(response_df, response_pca$x[,1:6])
+pc1_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = x, y = PC1), size = .5)
+pc2_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = x, y = PC2), size = .5)
+pc3_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = x, y = PC3), size = .5)
+pc4_plot = plot_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = x, y = PC4), size = .5)
+
+p = ggarrange(plotlist = list(pc1_plot, pc2_plot,
+                              pc3_plot, pc4_plot), nrow = 2, ncol = 2)
+p
+#ggsave("pcScorePlot.png", width = 10, height = 5)
+rm(plot_df,pc1_plot,pc2_plot,pc3_plot,pc4_plot)
+```
+
+```{r}
+combinedDF$PC1 = response_pca$x[,1]
+combinedDF$PC2 = response_pca$x[,2]
+combinedDF$PC3 = response_pca$x[,3]
+```
+
+```{r}
+#freq_k = 2*pi/2
+freq_k = 3.33
+```
+
+```{r}
+inti_lm = lm(y ~ 0 + h_x + lineID + lineID:PC1 + lineID:PC2 + lineID:PC2,
+             data = combinedDF %>%
+               mutate(h_x = h(x, FREQ = freq_k, AMP = 1)))
+summary(inti_lm)
+```
+
+# FPCA
+
+```{r}
+## R script for Steps 1-2 of FPCA: basis construction and projection onto hybrid basis
+# Supports robust inversion to avoid numerical singularity
+
+# Inputs:
+# - signal_mat: N x T matrix (each row is one signal)
+# - times: length-T numeric vector of observation times
+# - poly_order: maximum polynomial degree P (integer, >=0)
+# - fourier_freqs: numeric vector of frequencies (ω_j) for Fourier basis
+# - lambda: smoothing penalty (>=0)
+# - weights: optional length-T vector of quadrature weights (defaults to trapezoidal)
+# - ridge_epsilon: small constant for numerical regularization (default 1e-8)
+
+# Load libraries
+# (only base R + MASS for pseudoinverse if needed)
+library(MASS)
+
+# 1. Build design matrix B (T x K)
+create_design_matrix <- function(times, poly_order, fourier_freqs) {
+  poly_basis <- sapply(0:poly_order, function(p) times^p)
+  colnames(poly_basis) <- paste0("t^", 0:poly_order)
+
+  fourier_list <- lapply(fourier_freqs, function(omega) {
+    cbind(sin(omega * times), cos(omega * times))
+  })
+  fourier_basis <- do.call(cbind, fourier_list)
+  fourier_names <- unlist(lapply(fourier_freqs, function(omega) c(
+    paste0("sin_", format(omega, digits=4)),
+    paste0("cos_", format(omega, digits=4))
+  )))
+  colnames(fourier_basis) <- fourier_names
+
+  B <- cbind(poly_basis, fourier_basis)
+  return(B)
+}
+
+# 2. Compute penalty matrix R (K x K)
+compute_penalty_matrix <- function(times, poly_order, fourier_freqs, weights = NULL) {
+  dd_poly <- sapply(0:poly_order, function(p) {
+    if (p >= 2) p * (p - 1) * times^(p - 2) else rep(0, length(times))
+  })
+  dd_fourier_list <- lapply(fourier_freqs, function(omega) {
+    cbind(-omega^2 * sin(omega * times), -omega^2 * cos(omega * times))
+  })
+  dd_fourier <- do.call(cbind, dd_fourier_list)
+  ddB <- cbind(dd_poly, dd_fourier)
+
+  if (is.null(weights)) {
+    dt <- diff(times)
+    w <- numeric(length(times))
+    w[1] <- dt[1] / 2
+    w[length(times)] <- dt[length(dt)] / 2
+    w[2:(length(times)-1)] <- (dt[-1] + dt[-length(dt)]) / 2
+  } else {
+    w <- weights
+  }
+
+  R <- t(ddB) %*% (w * ddB)
+  return(R)
+}
+
+# 3. Project signals onto penalized basis to get coefficient matrix C (N x K)
+project_signals <- function(signal_mat, times, poly_order, fourier_freqs,
+                            lambda = 0, weights = NULL, ridge_epsilon = 1e-8) {
+  B <- create_design_matrix(times, poly_order, fourier_freqs)
+  R <- compute_penalty_matrix(times, poly_order, fourier_freqs, weights)
+
+  BtB <- t(B) %*% B
+  penalized <- BtB + lambda * R
+  diag(penalized) <- diag(penalized) + ridge_epsilon
+
+  inv_penalized <- tryCatch({
+    chol_fac <- chol(penalized)
+    chol2inv(chol_fac)
+  }, error = function(e) {
+    warning("Cholesky failed, using pseudoinverse via MASS::ginv")
+    ginv(penalized)
+  })
+
+  M <- inv_penalized %*% t(B)
+  C <- signal_mat %*% t(M)
+  return(list(
+    C = C,    # N x K coefficients
+    B = B,    # T x K design matrix
+    R = R,    # K x K penalty matrix
+    inv_pen = inv_penalized
+  ))
+}
+
+compute_gcv <- function(signal_mat, times, poly_order, fourier_freqs,
+                        lambda, weights = NULL, ridge_epsilon = 1e-8) {
+  # Project once to obtain design and inverse
+  proj <- project_signals(signal_mat, times, poly_order, fourier_freqs,
+                          lambda, weights, ridge_epsilon)
+  B <- proj$B
+  inv_pen <- proj$inv_pen
+
+  # Hat matrix H = B %*% inv_pen %*% t(B)  (T x T)
+  H <- B %*% inv_pen %*% t(B)
+  df <- sum(diag(H))  # effective degrees of freedom
+
+  # Compute residual sum of squares across all signals
+  fitted <- t(H %*% t(signal_mat))  # N x T
+  residuals <- signal_mat - fitted
+  rss <- sum(residuals^2)
+
+  N <- nrow(signal_mat)
+  T <- length(times)
+  gcv <- (rss / (N * T)) / (1 - df / T)^2
+
+  return(list(
+    gcv = gcv,
+    df = df
+  ))
+}
+```
+
+```{r}
+# Example usage:
+# poly_order <- 2
+# fourier_freqs <- seq(0.8, 1.2, length.out = 25)\#
+# lambda_grid <- 10^seq(-6, 0, length.out = 50)
+# gcv_vals <- sapply(lambda_grid, function(l) compute_gcv(signal_mat, times, poly_order, fourier_freqs, l)$gcv)
+# best_lambda <- lambda_grid[which.min(gcv_vals)]
+# best_lambda
+```
+
+```{r}
+poly_order = 2
+fourier_freqs = 2*pi/seq(1,900, length.out = 60)
+lambda_grid = 10^seq(-10, 0, length.out = 50)
+```
+
+```{r}
+smoothed_curves = project_signals(t(rv_mat), as.numeric(days), 2, fourier_freqs,
+                            lambda = 10)
+
+smoothed_curves = project_signals(t(rv_planet_mat), as.numeric(days), 2, fourier_freqs,
+                            lambda = 10)
+```
+
+
+```{r}
+# run pca with scaling
+f_pca = prcomp(smoothed_curves$C, center = T, scale = T, retx = T)
+```
+
+```{r}
+#calculate total variance explained by each principal component
+var_explained = f_pca$sdev^2 / sum(f_pca$sdev^2)
+head(var_explained)
+sum(var_explained[1:10])
+ggplot(mapping = aes(x = c(1:20),y = var_explained[1:20])) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  xlim(0,20)
+```
+
+
+
+```{r}
+pcs = ( smoothed_curves$B %*% f_pca$rotation )
+fit = smoothed_curves$B %*% t(smoothed_curves$C)
+```
+
+
+
+
+```{r}
+id = 300
+ggplot() +
+  geom_line(mapping = aes(x = days, y = fit[,id])) +
+  geom_point(mapping = aes(x = days, y = rv_mat[[id]]),color="red") 
+
+rm(id)
+```
+
+
+```{r}
+data.frame(
+  cols = colnames(smoothed_curves$B),
+  freq = str_split_fixed(colnames(smoothed_curves$B),"_",n=2)[,2],
+  loadings1 = f_pca$rotation[,1],
+  loadings2 = f_pca$rotation[,2]
+) %>%
+  filter(freq != "") %>%
+  group_by(freq) %>%
+  summarize(v = sum(abs(loadings1))) %>%
+  arrange(v) %>%
+  mutate(freq = as.numeric(freq)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = seq(1,900, length.out = 60), y = v))
+```
+
+```{r}
+seq(1,900, length.out = 60)
 ```
 

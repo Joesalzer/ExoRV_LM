@@ -38,7 +38,7 @@ TIMEGROUP_ID_NAME = "date_groups"
 ```
 
 ```{r}
-model_name = "Gauss=all_HG=all"
+model_name = "Gauss=all_HG=all_IRLS"
 ```
 
 *Options for model name:*
@@ -51,6 +51,7 @@ CommonSlopes
 LASSO (Full Model w/ LASSO)
 
 # fit results
+
 
 ```{r}
 model_fit = readRDS(str_c(wd_data, "models/", model_name, "/model.rds" ))
@@ -83,13 +84,6 @@ coef_df = tibble( coef = rownames( fit_lm$beta_hat ),
                   se = sqrt( diag(fit_lm$var_beta_hat) ) )
 ```
 
-```{r}
-# clean RV df with +- se
-cleanRV_df = model_fit$cleanRV_df %>%
-  mutate(lowerSE_MLE = estimate - se,
-         upperSE_MLE = estimate +se)
-```
-
 result summary
 ```{r}
 cat(model_name, "\n",
@@ -97,14 +91,7 @@ cat(model_name, "\n",
     str_c("BIC: ", round(fit_lm$BIC/1e5,3), "e5" ), "\n",
     str_c("RSE: ", round(fit_lm$RSE,4), "\n" ),
     str_c("Parameters: ", ncol(designMat), "\n"),
-    str_c("RMSE of cleaned RV to true planet: ", round(model_fit$RMSE,3) ), "\n",
-    str_c("mean se: ", round(mean( cleanRV_df$se ),3) ), "\n",
-    str_c("coverage 1se: ",
-          round(mean((cleanRV_df$estimate - cleanRV_df$se < 0) & (cleanRV_df$estimate + cleanRV_df$se > 0)),3),
-          "\n"),
-    str_c("coverage 2se: ",
-          round(mean((cleanRV_df$estimate - 2*cleanRV_df$se < 0) & (cleanRV_df$estimate + 2*cleanRV_df$se > 0)),3),
-          "\n"))
+    str_c("RMSE of cleaned RV to true planet: ", round(model_fit$RMSE,3) ), "\n")
 ```
 
 results for table in paper
@@ -119,18 +106,41 @@ cat(model_name, "&",
     )
 ```
 
-BF
-Gauss=all_HG=all & 11896 & $6.604 \times 10^5$ & $7.803 \times 10^5$ & 6.279 & 0.578 \\
-AF
-Gauss=all_HG=all & 11772 & $2.812 \times 10^5$ & $3.906 \times 10^5$ & 5.405 & 0.461 \\
+
+TWFE_IRLS & 1107 & 179741 & $17.067 \times 10^5$ & $17.183 \times 10^5$ & 27.706 & 1.722 \\
+Gauss=all_HG=all_IRLS & 11999 & 172725 & $9.945 \times 10^5$ & $11.2 \times 10^5$ & 6.781 & 0.403 \\
+LASSO_IRLS & 11744 & 172725 & $9.944 \times 10^5$ & $11.172 \times 10^5$ & 6.782 & 0.406 \\
+
+
+weighted metrics
+
+```{r}
+fit_lm$AIC
+```
+
+```{r}
+# effective sample size
+eff = 1/sum(model_fit$weights^2)
+print(eff)
+norm_weights = model_fit$weights*256740
+sum(norm_weights)
+```
+
+```{r}
+SSR_weight = sum(norm_weights*fit_lm$resid^2)
+
+eff * log(SSR_weight/eff) + 2 * length(fit_lm$beta_hat)
+```
+
 
 ## diagnostic plots
 
 rv effect plot
 
 ```{r}
-ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
-  geom_point(mapping = aes(y = cleanRV_df$estimate), size = 1.2) +
+model_fit$cleanRV_df %>%
+  ggplot( mapping = aes(x = timeID) ) +
+  geom_point(mapping = aes(y = estimate), size = 1.2) +
   geom_hline(yintercept = 0, color = "red") +
   ylab("Cleaned RV") +
   xlab("Date") +
@@ -138,6 +148,7 @@ ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
   theme(axis.text = element_text(size = 12),
         axis.title = element_text(size = 20))
 ```
+
 
 fitted rv and residual plot
 ```{r}
@@ -295,24 +306,99 @@ ggplot( mapping = aes(x = cleanRV_df$timeID) ) +
   xlab("day") #+ ylim(-6.1,6.1)
 ```
 
-
-## figure of both TWFE and full model
+## IRLS weights graph
 
 ```{r}
-model_fit_TWFE = readRDS(str_c(wd_data, "models/", "TWFE", "/model.rds" ))
-model_fit_FULL = readRDS(str_c(wd_data, "models/", "Gauss=all_HG=all", "/model.rds" ))
+rv_df %>%
+  mutate(weight = model_fit$weights) %>%
+  group_by(line_order) %>%
+  summarize(mean_weight = mean(weight)) %>%
+  ungroup() %>%
+  mutate(mean_weight = mean_weight/sum(mean_weight)) %>%
+  pull(mean_weight) %>%
+  sum()
 
-cleanRV_df = rbind(
-  model_fit_TWFE$cleanRV_df %>% mutate(model_name = "Baseline model"),
-  model_fit_FULL$cleanRV_df %>% mutate(model_name = "Full model")
-)
+rv_df %>%
+  mutate(weight = model_fit$weights) %>%
+  group_by(line_order) %>%
+  summarize(mean_weight = mean(weight)) %>%
+  ungroup() %>%
+  mutate(mean_weight = mean_weight/sum(mean_weight)) %>%
+  pull(mean_weight) %>%
+  mean()
 
-rm(model_fit_TWFE,model_fit_FULL)
-
+rv_df %>%
+  mutate(weight = model_fit$weights) %>%
+  group_by(line_order) %>%
+  summarize(mean_weight = mean(weight)) %>%
+  ungroup() %>%
+  mutate(mean_weight = mean_weight/sum(mean_weight)) %>%
+  pull(mean_weight) %>%
+  median()
 ```
 
 ```{r}
+rv_df %>%
+  mutate(weight = model_fit$weights) %>%
+  group_by(line_order) %>%
+  summarize(mean_weight = mean(weight),
+            wavelength = mean(fit_gauss_lambdac),
+            depth = mean(fit_gauss_depth),
+            snr = mean(mean_snr_pixel)) %>%
+  ungroup() %>%
+  mutate(mean_weight = mean_weight/sum(mean_weight)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = depth, y = snr, color = mean_weight), size = .9, alpha = .8) +
+  scale_color_viridis_c(option = "plasma", name = "Weight", direction = -1) +
+  labs(
+    x = "Mean Depth",
+    y = "Mean SNR"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 8),
+    legend.position = "right"
+  )
+
+ggsave("visuals/mean_weight_byLine.pdf", width = 3.5, height = 3, dpi = 300)
+```
+
+## figure of both TWFE, full, and OLS/IRLS model
+
+```{r}
+model_fit_TWFE = readRDS(str_c(wd_data, "models/", "TWFE", "/model.rds" ))
+model_fit_TWFE_IRLS = readRDS(str_c(wd_data, "models/", "TWFE_IRLS", "/model.rds" ))
+model_fit_FULL = readRDS(str_c(wd_data, "models/", "Gauss=all_HG=all", "/model.rds" ))
+model_fit_FULL_IRLS = readRDS(str_c(wd_data, "models/", "Gauss=all_HG=all_IRLS", "/model.rds" ))
+
+cleanRV_df = rbind(
+  model_fit_TWFE$cleanRV_df %>%
+    mutate(model_name = "Baseline - OLS") %>%
+  select(timeID, estimate, model_name),
+  model_fit_TWFE_IRLS$cleanRV_df %>%
+    mutate(model_name = "Baseline - IRLS") %>%
+  select(timeID, estimate, model_name),
+  model_fit_FULL$cleanRV_df %>%
+    mutate(model_name = "Full - OLS") %>%
+  select(timeID, estimate, model_name),
+  model_fit_FULL_IRLS$cleanRV_df %>%
+    mutate(model_name = "Full - IRLS") %>%
+  select(timeID, estimate, model_name)
+)
+
+rm(model_fit_TWFE,model_fit_TWFE_IRLS,model_fit_FULL,model_fit_FULL_IRLS)
+
+```
+
+
+
+
+```{r}
 cleanRV_df %>%
+  filter(model_name %in% c("Baseline model - OLS","Full model - OLS")) %>%
   ggplot(mapping = aes(x = timeID, y = estimate, color = model_name, shape = model_name)) +
   geom_point(size = .8, alpha = 0.85) +
   geom_hline(yintercept = 0, color = "black") +
@@ -335,8 +421,119 @@ cleanRV_df %>%
     legend.position = "bottom"
   )
 
-ggsave("visuals/cleanRV.pdf", width = 7, height = 3.5, dpi = 300)
+#
 ```
+
+```{r}
+cleanRV_df %>%
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name, shape = model_name)) +
+  geom_point(size = .8, alpha = 0.85) +
+  geom_hline(yintercept = 0, color = "black") +
+  scale_color_manual(values=c("Baseline - OLS" = "#377eb8",
+                              "Baseline - IRLS" = "gray",
+                              "Full - OLS" = "#ff7f00",
+                              "Full - IRLS" = "#4daf4a")) +
+  scale_shape_manual(values = c("Baseline - OLS" = 16,
+                                "Baseline - IRLS" = 3,
+                                "Full - OLS"= 17,
+                                "Full - IRLS" = 4)) +
+  guides(
+    color = guide_legend(title = "Model", override.aes = list(size = 4)),
+    shape = guide_legend(title = "Model")
+  ) +
+  labs(
+    y = "Cleaned RV - True Signal (m/s)",
+    x = "Date"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.position = "bottom"
+  )
+
+#ggsave("visuals/all_models.pdf", width = 7, height = 3.5, dpi = 300)
+```
+
+```{r}
+cleanRV_df %>%
+  filter(model_name %in% c(
+                           "Baseline - OLS",
+                           "Full - OLS")) %>%
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name, shape = model_name)) +
+  geom_point(size = 1, alpha = 0.85) +
+  geom_hline(yintercept = 0, color = "black") +
+  scale_color_manual(values=c("Baseline - OLS" = "#377eb8",
+                              "Baseline - IRLS" = "gray",
+                              "Full - OLS" = "#ff7f00",
+                              "Full - IRLS" = "#4daf4a")) +
+  scale_shape_manual(values = c("Baseline - OLS" = 16,
+                                "Baseline - IRLS" = 3,
+                                "Full - OLS"= 17,
+                                "Full - IRLS" = 4)) +
+  guides(
+    color = guide_legend(title = "Model", override.aes = list(size = 4)),
+    shape = guide_legend(title = "Model")
+  ) +
+  labs(
+    y = "Cleaned RV - True Signal (m/s)",
+    x = "Date"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.position = "bottom"
+  )
+
+ggsave("visuals/ols_only.pdf", width = 7, height = 3.5, dpi = 300)
+```
+
+```{r}
+cleanRV_df %>%
+  filter(model_name %in% c(
+                           "Full - OLS",
+                           "Full - IRLS")) %>%
+  ggplot(mapping = aes(x = timeID, y = estimate, color = model_name, shape = model_name)) +
+  geom_point(size = 1, alpha = 0.85) +
+  geom_hline(yintercept = 0, color = "black") +
+  scale_color_manual(values=c("Baseline - OLS" = "#377eb8",
+                              "Baseline - IRLS" = "gray",
+                              "Full - OLS" = "#ff7f00",
+                              "Full - IRLS" = "#4daf4a")) +
+  scale_shape_manual(values = c("Baseline - OLS" = 16,
+                                "Baseline - IRLS" = 3,
+                                "Full - OLS"= 17,
+                                "Full - IRLS" = 4)) +
+  guides(
+    color = guide_legend(title = "Model", override.aes = list(size = 4)),
+    shape = guide_legend(title = "Model")
+  ) +
+  labs(
+    y = "Cleaned RV - True Signal (m/s)",
+    x = "Date"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.position = "bottom"
+  )
+
+ggsave("visuals/full_only.pdf", width = 7, height = 3.5, dpi = 300)
+```
+
+
+
+
+
+
 
 # bootstrap results
 
@@ -452,79 +649,118 @@ summary(cleanRV_df$se)
 
 # cross validation
 
+*read-in OLS/IRLS cv results*
 ```{r}
 cvNames = c("LOODCV","LOOWCV","LOOMCV")
-modelNames = c("TWFE","LASSO","Gauss=all_HG=all")
+modelNames = c("TWFE","LASSO","Gauss=all_HG=all","TWFE_IRLS","Gauss=all_HG=all_IRLS","LASSO_IRLS")
+#modelNames = c("TWFE","LASSO","Gauss=all_HG=all","TWFE_IRLS","Gauss=all_HG=all_IRLS")
 
 # empty list for creating data frame
-cv_df = data.frame()
+cv_dfs = list()
 
 for (cvName in cvNames) {
+  print(cvName)
   for (modelName in modelNames) {
-    # list of files
+    print(modelName)
+    # list of files, skip empy folders
     cv_files = list.files( str_c(wd_data, "models/", modelName, "/", cvName) )
+    if (length(cv_files) == 0) next
+    
     # empty list for creating data frame
     cv_list = list()
     # time ID
     timeIDs = rep(NA,length(cv_files))
     # initialize cleaned RV's and standard errors 
-    rv_decontam = rep(NA, length(timeIDs))
+    rv_clean = rep(NA, length(timeIDs))
+    rv_clean_unweighted = rep(NA, length(timeIDs))
     se_decontam = rep(NA, length(timeIDs))
   
-    for ( i in 1:length(cv_files) ) {
-      # day that we'll test on
-      test_day = str_sub(str_split_fixed(cv_files, "_",3)[i,3],end = -5)
-      timeIDs[i] = test_day
-      
-      # the entire test set df
-      testset_df = readRDS( str_c(wd_data, "models/", modelName, "/", cvName, "/", cv_files[i] ) )$testDF
-      # grab the test day from the validation set 
-      decontamRV = testset_df %>%
-        filter(date == test_day) %>%
-        mutate(cleaned_rv = contam_rv - pred_rv) %>%
-        pull(cleaned_rv)
-      
-      # get the cleaned RV and se
-      rv_decontam[i] = mean(decontamRV)
-      se_decontam[i] = sd(decontamRV)
-
-      
-      rm(test_day,testset_df)
-    }
+      for ( i in 1:length(cv_files) ) {
+        # day that we'll test on
+        test_day = str_sub(str_split_fixed(cv_files, "_",3)[i,3],end = -5)
+        timeIDs[i] = test_day
+        
+        
+        val_results = readRDS( str_c(wd_data, "models/", modelName, "/", cvName, "/", cv_files[i] ) )
+        # if ols then set weights to constant
+        if (is.null(val_results$train_weights)) {
+          val_results$train_weights = val_results$testDF %>%
+          group_by(line_order) %>%
+          summarize(weight = 1)
+        }
+        
+        # get the entire test set df for a single day
+        testset_df = merge(val_results$testDF, val_results$train_weights) %>%
+          filter(date == test_day) %>%
+          mutate(cleaned_rv = contam_rv - pred_rv,
+                 norm_weight = weight/sum(weight))
+        
+        # get and store the cleaned RV and se
+        cleanRV_day = sum(testset_df$cleaned_rv*testset_df$norm_weight)
+        sum_weights_sq = sum(testset_df$norm_weight^2)
+        samp_var = sum(testset_df$norm_weight*(testset_df$cleaned_rv-cleanRV_day)^2)/(1-sum_weights_sq)
+        rv_clean[i] = cleanRV_day 
+        rv_clean_unweighted[i] = mean(testset_df$cleaned_rv)
+        se_decontam[i] = sqrt(samp_var)
+        
+        rm(test_day,testset_df,cleanRV_day,sum_weights_sq,samp_var)
+      }
     
-    cv_df = rbind(cv_df,
-                  data.frame(date = timeIDs,
-                             decontamRV = rv_decontam,
-                             seRV = se_decontam,
-                             modelID = modelName,
-                             cv_procedure = cvName
-                             )
-                  )
-    
-    #print(tail(cv_df))
+    cv_dfs[[str_c(cvName,"_",modelName)]] =
+      data.frame(date = timeIDs,
+                 cleanRV = rv_clean,
+                 cleanRV_unweighted = rv_clean_unweighted,
+                 seRV = se_decontam,
+                 modelID = modelName,
+                 cv_procedure = cvName
+                 )
 
   }
 }
+
+cv_df = do.call(rbind, cv_dfs)
+#rm(cv_dfs)
 ```
 
+
 rmse results by model
+
 ```{r}
 cv_df %>%
   group_by(modelID,cv_procedure) %>%
-  summarize(rmse = rmse_t(0,decontamRV))
+  summarize(rmse = rmse_t(0,cleanRV))
+```
+
+
+
+```{r}
+library(forcats)
+
+cv_df$modelID <- fct_recode(cv_df$modelID,
+  "Baseline - OLS" = "TWFE",
+  "Baseline - IRLS" = "TWFE_IRLS",
+  "Full - OLS" = "Gauss=all_HG=all",
+  "Full - IRLS" = "Gauss=all_HG=all_IRLS"
+)
 ```
 
 ```{r}
 cv_df %>%
   filter(modelID != "LASSO",
+         modelID != "LASSO_IRLS",
          cv_procedure == "LOOMCV") %>%
-  mutate(modelID = ifelse(modelID == "TWFE","Baseline model","Full Model") ) %>%
   ggplot() +
   geom_point(mapping = aes(x = as.Date(date), y = seRV, color = modelID, shape = modelID), size = .8, alpha = .85) +
   theme_minimal() +
   scale_y_log10() +
-  scale_color_manual(values=c("#ff7f00", "#377eb8")) +
-  scale_shape_manual(values = c(16, 17)) +
+  scale_color_manual(values=c("Baseline - OLS" = "#377eb8",
+                              "Baseline - IRLS" = "gray",
+                              "Full - OLS" = "#ff7f00",
+                              "Full - IRLS" = "#4daf4a")) +
+  scale_shape_manual(values = c("Baseline - OLS" = 16,
+                                "Baseline - IRLS" = 3,
+                                "Full - OLS"= 17,
+                                "Full - IRLS" = 4)) +
   guides(
     color = guide_legend(title = "Model", override.aes = list(size = 5)),
     shape = guide_legend(title = "Model")
@@ -541,6 +777,7 @@ cv_df %>%
 
 ggsave("visuals/cv_se.pdf", width = 7, height = 3.5, dpi = 300)
 ```
+
 
 ```{r}
 cv_df %>%
@@ -566,6 +803,7 @@ cv_df %>%
   summarize(avgPercentDiff = mean(percentDiff))
 ```
 
+difference between lasso v no lasso
 ```{r}
 cv_df %>%
   filter(modelID != "TWFE",
@@ -591,14 +829,3 @@ cv_df %>%
 ```
 
 LASSO is slightly better for LOOMCV, slightly worse for LOODCV, LOOWCV.
-
-
-```{r}
-cv_df %>%
-  filter(modelID != "LASSO",
-         cv_procedure == "LOOMCV") %>%
-  ggplot() +
-  geom_point(mapping = aes(x = as.Date(date), y = decontamRV, color = modelID), size = 1) +
-  theme_minimal() +
-  facet_wrap(~cv_procedure)
-```

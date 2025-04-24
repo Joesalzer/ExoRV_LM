@@ -20,15 +20,23 @@ library(pbmcapply)
 these will be passed to terminal
 ```{r}
 covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_hg_coeff_", c(0,seq(2,10,1))))
-# covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_thg_coeff_", c(0,seq(2,10,1))))
+#covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_thg_coeff_", c(0,seq(2,10,1))))
 #covariateNames = c()
 
 print(covariateNames)
 ```
 
-Rscript rv_lm.R completeLines.csv
+Rscript rv_ols.R completeLines.csv
+Rscript rv_irls.R completeLines.csv
 
+Full:
 fit_gauss_a,fit_gauss_b,fit_gauss_depth,fit_gauss_sigmasq,proj_hg_coeff_0,proj_hg_coeff_2,proj_hg_coeff_3,proj_hg_coeff_4,proj_hg_coeff_5,proj_hg_coeff_6,proj_hg_coeff_7,proj_hg_coeff_8,proj_hg_coeff_9,proj_hg_coeff_10
+
+Gauss=all_HG=none:
+fit_gauss_a,fit_gauss_b,fit_gauss_depth,fit_gauss_sigmasq
+
+Gauss=none_HG=all:
+proj_hg_coeff_0,proj_hg_coeff_2,proj_hg_coeff_3,proj_hg_coeff_4,proj_hg_coeff_5,proj_hg_coeff_6,proj_hg_coeff_7,proj_hg_coeff_8,proj_hg_coeff_9,proj_hg_coeff_10
 
 ```{r}
 # get csv file name
@@ -117,6 +125,14 @@ cat("The model name is:", model_name, "\n")
 
 below is the specification for the Common Slopes Model for covariateNames
 
+*THG*
+```{r}
+model_name = "Gauss=all_THG=all"
+# create model directory
+model_dir = str_c(WD_DATA,"models/",model_name)
+if (!dir.exists(model_dir)) {dir.create(model_dir)}
+```
+
 *COMMON SLOPES*
 ```{r}
 modelFormula = as.formula(paste("~ 0 ", paste0(covariateNames, "_centered", collapse = " + "), sep = " + "))
@@ -143,7 +159,8 @@ standardized_list = completeLines_df %>%
 rv_df = standardized_list$train.df %>%
   arrange(LINE_ID_NAME, TIME_ID_NAME) %>%
   mutate(timeID = factor(!!sym(TIME_ID_NAME)),
-         lineID = factor(!!sym(LINE_ID_NAME)))
+         lineID = factor(!!sym(LINE_ID_NAME)),
+         lineID_group_offset = factor(str_c(!!sym(LINE_ID_NAME),"_",!!sym(TIMEGROUP_ID_NAME))))
 
 # set responses
 responses = rv_df[[RESPONSE]]
@@ -152,7 +169,7 @@ responses = rv_df[[RESPONSE]]
 *with planet*
 ```{r}
 AMP = 3
-HORIZONTAL_OFFSET = 0
+HORIZONTAL_OFFSET = 10
 VERTICAL_OFFSET = 0
 FREQ = 2*pi/250
 
@@ -162,31 +179,43 @@ rv_df = ( injectPlanet(completeLines_df, amp = AMP, freq = FREQ, horizontal_offs
   arrange(!!sym(LINE_ID_NAME), !!sym(TIME_ID_NAME))
 
 # mean offset for non-noisy planet signal, noisy planet signal, and noise (original rv signal)
-rv_df %>%
-  select(date,date_groups,pert_val,pert_rv,rv_template_0.5) %>%
-  unique() %>%
-  group_by(date_groups) %>%
-  summarize(planet_offset = mean(pert_val),
-            noisePlanet_offset = mean(pert_rv),
-            noise_offset = mean(rv_template_0.5))
+# rv_df %>%
+#   select(date,date_groups,pert_val,pert_rv,rv_template_0.5) %>%
+#   unique() %>%
+#   group_by(date_groups) %>%
+#   summarize(planet_offset = mean(pert_val),
+#             noisePlanet_offset = mean(pert_rv),
+#             noise_offset = mean(rv_template_0.5))
 
-estimated_rv = rv_df %>%
-  group_by(date) %>%
-  summarize(est_rv = mean(pert_rv))
+# estimated_rv = rv_df %>%
+#   group_by(date) %>%
+#   summarize(est_rv = mean(pert_rv))
 
-seq_days = seq(min(estimated_rv$date), max(estimated_rv$date), by = 1)
+#seq_days = seq(min(estimated_rv$date), max(estimated_rv$date), by = 1)
 
-ggplot() +
-  geom_point(mapping = aes(x = estimated_rv$date, y = estimated_rv$est_rv)) +
-  geom_line(mapping = aes(x = seq_days,
-                          y = VERTICAL_OFFSET + AMP*sin(FREQ*changeFun(as.numeric(seq_days))+HORIZONTAL_OFFSET) ) )
+# ggplot() +
+#   geom_point(mapping = aes(x = estimated_rv$date, y = estimated_rv$est_rv)) +
+#   geom_line(mapping = aes(x = seq_days,
+#                           y = VERTICAL_OFFSET + AMP*sin(FREQ*changeFun(as.numeric(seq_days))+HORIZONTAL_OFFSET) ) )
 
 # set responses
-responses = rv_df$pert_rv
+responses = rv_df$planet_rv
 
 rm(AMP,HORIZONTAL_OFFSET,VERTICAL_OFFSET,FREQ,estimated_rv,seq_days)
 ```
 
+```{r}
+trueRV = rv_df %>%
+  group_by(date) %>%
+  summarize(trueRV = mean(planet_val),
+         date_groups = mean(date_groups)) %>%
+  ungroup() %>%
+  group_by(date_groups) %>%
+  mutate(trueRV_group = trueRV - mean(trueRV)) %>%
+  ungroup() %>%
+  pull(trueRV_group)
+head(trueRV)
+```
 
 ## set contrasts and make design matrix
 
@@ -246,10 +275,7 @@ group_sizes = rv_df %>%
   group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
   summarize(size = n()/L_) %>%
   pull(size)
-```
-
-```{r}
-# time fixed effects encoding matrix
+# get encoding for time effects offset
 S_time = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
 # time fixed effects design matrix
 X_time = kronecker(rep(1,L_), S_time)
@@ -257,28 +283,64 @@ dim(X_time)
 ```
 
 ```{r}
-# design matrix for the line-group fixed effects
-X_line = kronecker(diag(L_), bdiag(lapply(group_sizes, function(n) rep(1, n))))
+X_line = sparse.model.matrix(~0 +lineID_group_offset + line_order:fit_gauss_a_centered + line_order:fit_gauss_b_centered + 
+    line_order:fit_gauss_depth_centered + line_order:fit_gauss_sigmasq_centered + 
+    line_order:proj_hg_coeff_0_centered + line_order:proj_hg_coeff_2_centered + 
+    line_order:proj_hg_coeff_3_centered + line_order:proj_hg_coeff_4_centered + 
+    line_order:proj_hg_coeff_5_centered + line_order:proj_hg_coeff_6_centered + 
+    line_order:proj_hg_coeff_7_centered + line_order:proj_hg_coeff_8_centered + 
+    line_order:proj_hg_coeff_9_centered + line_order:proj_hg_coeff_10_centered, rv_df,
+                             contrasts.arg = list(lineID_group_offset = contr.sum,
+                                                  line_order = contr.sum))
 dim(X_line)
-```
-```{r}
-# design matrix for the covariates
-X_covar = sparse.model.matrix(modelFormula,rv_df) 
-dim(X_covar)
 ```
 
 ```{r}
 # create full design matrix
-designMat = cbind(X_time,X_line,X_covar)
+designMat = cbind(X_time,X_line)
 dim(designMat)
-
-rm(X_time,X_line,X_covar)
 ```
-
 ```{r}
 T_+2*L_+L_*14-2
 T_+2*L_+L_*0-2
 ```
+
+*group sum2zero for timeIDs, sum2zero for lineIDs (multiple intercept, multiple slope model)*
+
+```{r}
+# get group sizes
+group_sizes = rv_df %>%
+  group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
+  summarize(size = n()/L_) %>%
+  pull(size)
+# get encoding for time effects offset
+S_time = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+# time fixed effects design matrix
+X_time = kronecker(rep(1,L_), S_time)
+dim(X_time)
+```
+
+```{r}
+X_line = sparse.model.matrix(~0 +lineID_group_offset + lineID_group_offset:fit_gauss_a_centered + lineID_group_offset:fit_gauss_b_centered + 
+    lineID_group_offset:fit_gauss_depth_centered + lineID_group_offset:fit_gauss_sigmasq_centered + 
+    lineID_group_offset:proj_hg_coeff_0_centered + lineID_group_offset:proj_hg_coeff_2_centered + 
+    lineID_group_offset:proj_hg_coeff_3_centered + lineID_group_offset:proj_hg_coeff_4_centered + 
+    lineID_group_offset:proj_hg_coeff_5_centered + lineID_group_offset:proj_hg_coeff_6_centered + 
+    lineID_group_offset:proj_hg_coeff_7_centered + lineID_group_offset:proj_hg_coeff_8_centered + 
+    lineID_group_offset:proj_hg_coeff_9_centered + lineID_group_offset:proj_hg_coeff_10_centered, rv_df,
+                             contrasts.arg = list(lineID_group_offset = contr.sum))
+dim(X_line)
+```
+```{r}
+# create full design matrix
+designMat = cbind(X_time,X_line)
+dim(designMat)
+```
+```{r}
+T_+2*L_+L_*14*2-2
+T_+2*L_+L_*0-2
+```
+
 
 *NOTATION FOR THE MISS model, line_group fixed effects*
 
@@ -311,12 +373,21 @@ fit_lm = sparseLM(designMat, responses)
 
 ## get cleaned RVs
 
+*single intercept, single slope*
 ```{r}
 # initialize 0's in the linear operator
-linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat), sparse = T )
 # matrix for estimating the cleaned RV
 linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
 ```
+*multiple intercept*
+```{r}
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,1:(sum(group_sizes)-2)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+```
+
 
 ```{r}
 # covariance matrix of model parameters
@@ -336,12 +407,19 @@ RMSE = rmse_t(0,cleanRV_df$estimate)
 ```
 
 
+
+```{r}
+cleanRV_df %>%
+  ggplot() +
+  geom_point(mapping = aes(x = timeID, y = estimate))
+```
+
 ## save fit
 
 ```{r}
 saveRDS(list(designMat = designMat,
              responses = responses,
-             df = rv_df,
+             df = completeLines_df,
              group_sizes = group_sizes,
              modelFormula = modelFormula,
              covariateNames = covariateNames,
@@ -551,9 +629,9 @@ rm(boot_straps)
 # pass on command line
 
 # model name
-MODEL_NAME = "LASSO"
+MODEL_NAME = "Gauss=All_HG=all"
 # number of timeIDs in each leave-one-out cv
-CV_NUM_DAY = 28
+CV_NUM_DAY = 150
 ```
 
 ```{r}
@@ -597,11 +675,14 @@ left_out_timeIDs[[2]]
 left_out_timeIDs[[15]]
 left_out_timeIDs[[227]]
 left_out_timeIDs[[228]]
-
-# summary of the size of each left-out set
-summary( sapply(left_out_timeIDs, FUN = function(x) length(x$test_set) ) )
 ```
 
+```{r}
+# length of left-out dataset
+summary( sapply(left_out_timeIDs, FUN = function(x) length(x$test_set) ) )
+# length of left-in dataset
+summary( T_-sapply(left_out_timeIDs, FUN = function(x) length(x$test_set) ) )
+```
 
 ```{r}
 cv_parallel = function(i) {
@@ -696,11 +777,7 @@ cv_parallel = function(i) {
 ```
 
 ```{r}
-cv_parallel(left_out_timeIDs[[1]])
-```
-
-```{r}
-cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel, mc.cores = 6)
+cv_list <- pbmclapply(left_out_timeIDs, FUN = cv_parallel, mc.cores = 8)
 #cv_df = do.call(rbind, cv_list)
 rm(cv_list)
 ```
@@ -978,19 +1055,158 @@ test_df %>%
   summarize(rmse = sqrt(mean((contam_rv-pred_rv)^2)) )
 ```
 
+# Iteratvely Reweighted least squares
+
+*run the full IRLS procedure*
+```{r}
+###########################
+## fit a LM using model matrix and responses##
+###########################
+
+# rse_tol : tolerance for the RSE as it changes
+# max.iter : maximum number of iterations to run
+# X (n x p) : model matrix
+# Y (n x 1) : responses
+# df : dataframe of observations
+# lineIDname : column name of the lines
+
+IRLS = function(rse_tol = 2e-05,
+                max.iter = 10,
+                X = designMat,
+                Y = responses,
+                df = completeLines_df,
+                lineIDname = LINE_ID_NAME) {
+  ## initialize equal weights ##
+  iter = 1
+  # weight vector
+  w_irls = rep(1, nrow(X))
+  wls_fit = sparseWLM(X, Y, w_irls)
+  # rse for each iteration
+  rse_iter = list()
+  rse_iter[[1]] = 0
+  rse_iter[[2]] = wls_fit$RSE
+  
+  while( (iter < max.iter) & (rse_iter[[iter+1]] - rse_iter[[iter]]>rse_tol) ) {
+    iter = iter + 1
+    # re-weight line-by-line, update weight vector
+    w_irls = df %>%
+      mutate(r = wls_fit$resid[,1]) %>%
+      group_by(!!sym(lineIDname)) %>%
+      mutate(sar = sum(abs(r)),
+             w = 1/sar) %>%
+      ungroup() %>%
+      pull(w)
+    w_irls = w_irls/sum(w_irls)
+    # fit new model
+    wls_fit = sparseWLM(X, Y, w_irls)
+    rse_iter[[iter + 1]] = wls_fit$RSE
+    #print(iter)
+  }
+  cat("iter: ", iter, " diff RSE: ", rse_iter[[iter+1]] - rse_iter[[iter]], "\n")
+  return(list(fit_lm = wls_fit,
+              weights = w_irls) )
+}
+```
+
+```{r}
+irls_results = IRLS(max.iter = 20)
+fit_lm = irls_results$fit_lm
+w_irls = irls_results$weights
+```
+
+```{r}
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+
+# dataframe of date's cleaned rv
+cleanRV_df = data.frame(
+  timeID = as.Date(timeIDs)
+)
+# find the mle estiamte, var, and se for the intercept plus alpha
+cleanRV_df$estimate = (linear_op_mat %*% fit_lm$beta_hat[,1] )[,1]
+# find rmse of the clean RV
+RMSE = rmse_t(0,cleanRV_df$estimate)
+```
+
+```{r}
+if (!dir.exists(str_c(model_dir,"_IRLS"))) {dir.create(str_c(model_dir,"_IRLS"))}
+
+saveRDS(list(designMat = designMat,
+             responses = responses,
+             df = completeLines_df,
+             group_sizes = group_sizes,
+             modelFormula = modelFormula,
+             covariateNames = covariateNames,
+             fit_lm = fit_lm,
+             cleanRV_df = cleanRV_df,
+             RMSE = RMSE),
+        file = str_c(model_dir, "_IRLS/model.rds" ) )
+```
+
+
+
+End result
+
+*Baseline Model -- OLS*
+AIC: 17.06112 x 10^5 
+BIC: 17.17686 x 10^5 
+RMSE: 1.91929 
+RSE: 27.61435
+Effective sample size: 256740 
+*Full Model -- OLS*
+AIC: 9.938 x 10^5 
+BIC: 11.192 x 10^5
+RMSE: 0.575
+RSE: 6.610317
+Effective sample size: 256740
+*Baseline Model -- IRLS*
+AIC: 17.06713 x 10^5 
+BIC: 17.18288 x 10^5 
+RMSE: 1.722021 
+RSE: 27.64671 
+Effective sample size: 179739.2 
+*Full Model -- IRLS*
+AIC: 9.945407 x 10^5 
+BIC: 11.2 x 10^5 
+RMSE: 0.4032205 
+RSE: 6.620226 
+Effective sample size: 172722.2 
+
+
+
+
 # LASSO feature selection
 
 ```{r}
 library(glmnet)
-X = designMat
-y = responses
+```
+
+change model name if necessary
+```{r}
+model_name = "Gauss=all_HG=all_IRLS"
+
+model_dir = str_c(WD_DATA,"models/LASSO_IRLS")
+# create directory
+if (!dir.exists(model_dir)) {dir.create(model_dir)}
 ```
 
 ```{r}
-model_name = "LASSO"
-model_dir = str_c(WD_DATA,"models/",model_name)
-# create directory
-if (!dir.exists(model_dir)) {dir.create(model_dir)}
+# read in the model fit
+model_fit = readRDS(str_c(WD_DATA, "models/", model_name, "/model.rds"))
+# lm fit, df, design matrix and leverages
+fit_lm = model_fit$fit_lm
+X = model_fit$designMat
+y = model_fit$responses
+model_weights = model_fit$weights
+```
+
+```{r}
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
 ```
 
 ```{r}
@@ -998,98 +1214,142 @@ if (!dir.exists(model_dir)) {dir.create(model_dir)}
 penalty_factors = rep(1, ncol(X[,-1]))
 
 # determine number of parameters to not penalize (time FE)
-#non_penalized = T_ + 2*L_ - 3
+# SISS
 non_penalized = (T_-1)+(L_-1)
+# MIMS - modify this
+# non_penalized = (T_-2)
 
 # set the non-penalized columns
 penalty_factors[1:non_penalized] = 0
 ```
 
 ```{r}
-head( colnames(X[,-1])[1:non_penalized] )
-tail( colnames(X[,-1])[1:non_penalized] )
+# lasso fit
+lasso_fit = glmnet(X[,-1], y,
+                   alpha = 1,
+                   penalty.factor = penalty_factors,
+                   weights = model_weights,
+                   intercept = T,
+                   lambda = 0.0004)
+
+lasso_coef = coef(lasso_fit)
+cleanRV_LASSO = (linear_op_mat %*% lasso_coef)[,1]
+
+
+# percent columns removed
+print( 100*mean( (lasso_coef == 0)[,1] ) )
+# rmse of LASSO
+print( sqrt( mean(cleanRV_LASSO^2) ) )
+
+
+# get coefs that are exactly 0 in LASSO
+zero_columns = (lasso_coef==0)[,1]
+# remove those columns from the design matrix
+designMat_LASSO = X[,!zero_columns]
+# fit the linear model using all data
+fit_lm = sparseWLM(designMat_LASSO, y, model_weights)
+
+gamma = fit_lm$beta_hat
+alpha = gamma[3:T_]
+cleanRV = bdiag(lapply(group_sizes, function(n) contr.sum(n) )) %*% alpha
+
+# store results
+fit_lm$AIC/1e5
+fit_lm$BIC/1e5
+sqrt( mean(( cleanRV )^2) )
+fit_lm$RSE
 ```
 
-```{r}
-set.seed(123)
-cv_lasso = cv.glmnet(X[,-1], y, alpha = 1, penalty.factor = penalty_factors)
-#lasso_coef = coef( cv_lasso  )
-```
-
-```{r}
-cv_lasso$lambda.min
-cv_lasso$lambda.1se
-```
-
-```{r}
-# lasso coefficients
-lasso_coef = coef( glmnet(X[,-1], y, alpha = 1, lambda = 0.0002, penalty.factor = penalty_factors) )[,1]
-```
 
 
+
+lambda = 0.002
+[1] 33.68614
+[1] 1.494275
+Time difference of 8.660292 secs
+[1] 10.73447
+[1] 11.56644
+[1] 1.122673
+[1] 7.966794
+
+lambda = 0.0007
+[1] 21.89349
+[1] 1.142513
+Time difference of 12.1647 secs
+[1] 10.24715
+[1] 11.22707
+[1] 0.7070691
+[1] 7.226224
+
+lambda = 0.0004
+[1] 15.03459
+[1] 0.9779212
+Time difference of 14.03362 secs
+[1] 10.07808
+[1] 11.14405
+[1] 0.5449326
+[1] 6.98142
+
+lambda = 0.0003
+[1] 11.88432
+[1] 0.9122636
+Time difference of 15.34105 secs
+[1] 10.02787
+[1] 11.13337
+[1] 0.4956443
+[1] 6.908614
+
+lambda = 0.0002
+[1] 8.784065
+[1] 0.8567977
+Time difference of 16.4001 secs
+[1] 9.992543
+[1] 11.13693
+[1] 0.4550395
+[1] 6.85649
+
+lambda = 0.00005
+[1] 1.791816
+[1] 0.7432322
+Time difference of 18.66662 secs
+[1] 9.944159
+[1] 11.17627
+[1] 0.4072171
+[1] 6.78161
+
+lambda = 0.00002
+[1] 0.2250188
+[1] 0.7483954
+Time difference of 18.81867 secs
+[1] 9.945312
+[1] 11.19708
+[1] 0.4033595
+[1] 6.780771
+
+
+MIMS
 ```{r}
 # get coefs that are exactly 0 in LASSO
-zero_columns = (lasso_coef==0)
+zero_columns = (lasso_coef[-1]==0)
+100*sum(zero_columns)/nrow(X)
 # remove those columns from the design matrix
 designMat_LASSO = X[,!zero_columns]
 # fit the linear model using all data
 fit_lm = sparseLM(designMat_LASSO, y)
 
-gamma = fit_lm$beta_hat[,1]
-alpha = gamma[3:330]
-cleanRV = (bdiag(lapply(group_sizes, contr.sum)) %*% alpha)[,1]
-```
-
-```{r}
-# store results
-fit_lm$AIC
-fit_lm$BIC
-sqrt( mean(( cleanRV )^2) )
 fit_lm$RSE
-sum(zero_columns)
+fit_lm$AIC/1e5
+
+fit_lm$RSE
+fit_lm$AIC/1e5
 ```
-
-lambda = 0.001497261
-[1] 1041778
-[1] 1130328
-[1] 1.035963
-[1] 7.483062
-[1] 3530
-
-lambda = 0.0002
-[1] 995403.2
-[1] 1109361
-[1] 0.6217904
-[1] 6.805841
-[1] 1100
-
-lambda = 0.0001
-[1] 993426.2
-[1] 1113124
-[1] 0.5876584
-[1] 6.772772
-[1] 551
-
-lambda = 0.00001
-[1] 993752.4
-[1] 1119107
-[1] 0.5754356
-[1] 6.770281
-[1] 10
-
-lambda = 0
-[1] 993771.6
-[1] 1119231
-[1] 0.5754301
-[1] 6.770408
-[1] 0
 
 
 ```{r}
 # initialize runs, lambdas, number of zero columns, AIC, BIC, and RMSE
 
-num_runs = 40
-lambdas = seq(0, 0.0002, length.out = num_runs)
+num_runs = 50
+lambdas = seq(0, 0.0004, length.out = num_runs)
 
 numZeroCols = rep(NA,num_runs)
 AICs = rep(NA,num_runs)
@@ -1103,30 +1363,77 @@ RSEs = rep(NA,num_runs)
 for (i in 1:length(lambdas)) {
   # set a lambda for our regularizer
   lam = lambdas[i]
-  # lasso coefficients
-  lasso_coef = coef( glmnet(X[,-1], y, alpha = 1, lambda = lam, penalty.factor = penalty_factors) )[,1]
+  # lasso fit
+  lasso_fit = glmnet(X[,-1], y,
+                     alpha = 1,
+                     penalty.factor = penalty_factors,
+                     weights = model_weights,
+                     intercept = T,
+                     lambda = lam)
+  
+  lasso_coef = coef(lasso_fit)
+  cleanRV_LASSO = (linear_op_mat %*% lasso_coef)[,1]
   
   # get coefs that are exactly 0 in LASSO
-  zero_columns = (lasso_coef==0)
-  
-  # store number of zero columns
-  numZeroCols[i] = sum(zero_columns)
-  
+  zero_columns = (lasso_coef==0)[,1]
   # remove those columns from the design matrix
   designMat_LASSO = X[,!zero_columns]
   # fit the linear model using all data
-  fit_lm = sparseLM(designMat_LASSO, y)
-
-  gamma = fit_lm$beta_hat[,1]
-  alpha = gamma[3:330]
-  cleanRV = (bdiag(lapply(group_sizes, contr.sum)) %*% alpha)[,1]
+  fit_lm = sparseWLM(designMat_LASSO, y, model_weights)
+  
+  gamma = fit_lm$beta_hat
+  alpha = gamma[3:T_]
+  cleanRV = bdiag(lapply(group_sizes, function(n) contr.sum(n) )) %*% alpha
   
   # store results
   AICs[i] = fit_lm$AIC
   BICs[i] = fit_lm$BIC
   RMSEs[i] = sqrt( mean(( cleanRV )^2) )
   RSEs[i] = fit_lm$RSE
+  numZeroCols[i] = sum(zero_columns)
 }
+```
+
+```{r}
+saveRDS(
+  list(AICs = AICs, 
+       BICs = BICs, 
+       RMSEs = RMSEs,
+       RSEs = RSEs,
+       lambdas = lambdas,
+       numZeroCols = numZeroCols),
+  str_c(model_dir, "/LASSO_results.rds"))
+```
+
+
+old
+```{r}
+# for (i in 1:length(lambdas)) {
+#   # set a lambda for our regularizer
+#   lam = lambdas[i]
+#   # lasso coefficients
+#   lasso_coef = coef( glmnet(X[,-1], y, alpha = 1, lambda = lam, penalty.factor = penalty_factors) )[,1]
+#   
+#   # get coefs that are exactly 0 in LASSO
+#   zero_columns = (lasso_coef==0)
+# 
+#   
+#   # remove those columns from the design matrix
+#   designMat_LASSO = X[,!zero_columns]
+#   # fit the linear model using all data
+#   fit_lm = sparseLM(designMat_LASSO, y)
+# 
+#   gamma = fit_lm$beta_hat[,1]
+#   alpha = gamma[3:330]
+#   cleanRV = (bdiag(lapply(group_sizes, contr.sum)) %*% alpha)[,1]
+#   
+#   # store results
+#   AICs[i] = fit_lm$AIC
+#   BICs[i] = fit_lm$BIC
+#   RMSEs[i] = sqrt( mean(( cleanRV )^2) )
+#   RSEs[i] = fit_lm$RSE
+#   numZeroCols[i] = sum(zero_columns)
+# }
 ```
 
 ```{r}
@@ -1144,12 +1451,12 @@ saveRDS(
 
 ```{r}
 lasso_results = readRDS(str_c(model_dir, "/LASSO_results.rds"))
-lasso_results
+#lasso_results
 ```
 
 ```{r}
 ggplot() +
-  geom_line(mapping = aes(x = lasso_results$numZeroCols, lasso_results$AICs)) +
+  geom_point(mapping = aes(x = lasso_results$numZeroCols, lasso_results$AICs)) +
   xlab("percent of columns removed") +
   ylab("AIC") +
   geom_vline(xintercept = lasso_results$numZeroCols[which.min(lasso_results$AICs)])+
@@ -1198,12 +1505,6 @@ lasso_results$RMSEs[which.min(lasso_results$BICs)]
 lasso_results$numZeroCols[which.min(lasso_results$BICs)]
 ```
 
-```{r}
-# RMSE differences between no LASSO vs min AIC LASSO
-lasso_results$RMSEs[which.min(lasso_results$RSEs)]
-# how many columns are removed
-lasso_results$numZeroCols[which.min(lasso_results$RSEs)]
-```
 
 *fitting a linear model with the LASSO chosen features*
 
@@ -1215,41 +1516,40 @@ lasso_results$numZeroCols[which.min(lasso_results$RSEs)]
 lam = lasso_results$lambdas[which.min(lasso_results$BICs)]
 ```
 
+
 ```{r}
+# fit lasso
+lasso_fit = glmnet(X[,-1], y,
+                   alpha = 1,
+                   penalty.factor = penalty_factors,
+                   weights = model_weights,
+                   intercept = T,
+                   lambda = lam)
 # get coefs from a LASSO
-lasso_coef = coef( glmnet(X[,-1], y, alpha = 1, lambda = lam, penalty.factor = penalty_factors) )
+lasso_coef = coef(lasso_fit)
 # get coefs that are exactly 0 in LASSO
-zero_columns = rownames(lasso_coef)[(lasso_coef == 0)[,1]]
+zero_columns = (lasso_coef==0)[,1]
 # remove those columns from the design matrix
-designMat_LASSO = X[,setdiff(colnames(X),zero_columns)]
+designMat_LASSO = X[,!zero_columns]
 # fit the linear model using all data
-fit_lm = sparseLM(designMat_LASSO, responses)
+fit_lm = sparseWLM(designMat_LASSO, y, model_weights)
 ```
+
 
 ```{r}
 # initialize 0's in the linear operator
-linear_op_mat = Matrix(0, nrow = T_, ncol = length(fit_lm$beta_hat[,1]), sparse = T )
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat_LASSO), sparse = T ) 
 # matrix for estimating the cleaned RV
-linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = contr_groupSum(group_sizes)[,length(group_sizes):(sum(group_sizes)-1)]
-# covariance matrix of model parameters
-cov_mat = fit_lm$var_beta_hat
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
 
 # dataframe of date's cleaned rv
 cleanRV_df = data.frame(
   timeID = as.Date(timeIDs)
 )
 # find the mle estiamte, var, and se for the intercept plus alpha
-cleanRV_df$estimate = (linear_op_mat %*% fit_lm$beta_hat[,1] )[,1]
-cleanRV_covar = linear_op_mat %*% cov_mat %*% t(linear_op_mat)
-cleanRV_df$var = diag( cleanRV_covar )
-cleanRV_df$se = sqrt(cleanRV_df$var)
+cleanRV_df$estimate = (linear_op_mat %*% fit_lm$beta_hat)[,1]
 # find rmse of the clean RV
 RMSE = rmse_t(0,cleanRV_df$estimate)
-```
-
-```{r}
-RMSE
-length(zero_columns)
 ```
 
 ```{r}
