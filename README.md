@@ -66,3 +66,5 @@ This minimal working example will reproduce the results from the OLS Full Model 
 4. Go to terminal at this directory, and run: Rscript rv_ols.R completeLines.csv fit_gauss_a,fit_gauss_b,fit_gauss_depth,fit_gauss_sigmasq,proj_hg_coeff_0,proj_hg_coeff_2,proj_hg_coeff_3,proj_hg_coeff_4,proj_hg_coeff_5,proj_hg_coeff_6,proj_hg_coeff_7,proj_hg_coeff_8,proj_hg_coeff_9,proj_hg_coeff_10
 5. If everything runs smoothly a folder called "models" will be created in your working directory with a subfolder of the model's name and metrics that have to do with the fit model itself as a file called "model.rds"
 6. Results can be viewed by opening this model in R via the readRDS function.
+
+We have also written a file "example.Rmd" that fully goes through the process of fitting the OLS/IRLS estimators for the model. We recommend that practitioners take a look at this markdown file if they are interested in implementing the model in another language.

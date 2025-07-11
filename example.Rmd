@@ -1,0 +1,513 @@
+---
+title: "NEID Solar Data -- Fixed effects modeling, working example"
+author: "Joe Salzer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This script provides a working example of the fixed effects procedure from "Searching for Low-Mass Exoplanets Amid Stellar Variability with a Fixed Effects Linear Model of Line-by-Line Shape Changes" (Salzer et al. 2025). It provides extensive details for the fitting procedure for both OLS and IRLS using "shape change" measurements to decorrelate RV measurements and produce a cleaned RV time-series.
+
+It is written to read-in the csvfile "completeLines.csv", which contains the line-by-line RVs and shape-change covariates.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+require(stringr)
+library(Matrix)
+```
+
+# loading CSV file and column names
+
+L_ = number of lines
+T_ = number of time-points
+
+This section reads-in the csv file, which should have T_ * L_ rows. There should be one column that identities the time-points and another that identifies the line ID. There ought to be another column that identifies if an observation was before/after the Contreras fire. See our paper for details on the shape-change covariates and how to modify the linear model for different numbers of temporal groups.
+
+```{r}
+# csv file name
+csvFileName = "completeLines.csv"
+# working directory with the data
+WD_DATA = "/Users/josephsalzer/research/exostat/"
+# response variable -- contaminated line-by-line RVs
+RESPONSE = "rv_template_0.5"
+# column names of the timeID, lineID, and timeGroupID if applicable
+TIME_ID_NAME = "date"
+LINE_ID_NAME = "line_order"
+TIMEGROUP_ID_NAME = "date_groups"
+# csv file name
+completeLines_df = read_csv(str_c(WD_DATA,csvFileName)) %>%
+  mutate(!!TIME_ID_NAME := as.Date( !!sym(TIME_ID_NAME) ))
+
+# view some columns from the csv file
+completeLines_df %>%
+  dplyr::select( TIME_ID_NAME, LINE_ID_NAME, TIMEGROUP_ID_NAME, RESPONSE, "fit_gauss_depth")  %>%
+  head()
+```
+
+```{r}
+# column names of the shape-change covariates
+covariateNames = c("fit_gauss_a", "fit_gauss_b", "fit_gauss_depth", "fit_gauss_sigmasq",str_c("proj_hg_coeff_", c(0,seq(2,10,1))))
+print(covariateNames)
+```
+
+```{r}
+# vector of lineIDs  in completeLines_df
+lineIDs = completeLines_df %>% group_by(!!sym(LINE_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(LINE_ID_NAME))
+# vector of timeIDs in completeLines_df
+timeIDs = completeLines_df %>% group_by(!!sym(TIME_ID_NAME)) %>% summarize(n. = n()) %>% pull(!!sym(TIME_ID_NAME))
+# number of lines and time-points
+T_ = length(timeIDs)
+L_ = length(lineIDs)
+```
+
+```{r}
+# get number of time-points before fire and after fire
+group_sizes = completeLines_df %>%
+  group_by(!!sym(TIMEGROUP_ID_NAME)) %>%
+  summarize(size = n()/L_) %>%
+  pull(size)
+group_sizes
+```
+
+# standardize dataframe
+
+This section standardizes the dataframe, i.e, centering the covariates for each line and dividing by the standard deviation across every line for each covariate. This creates the standardized dataframe "rv_df" and also removes the original read-in csv completeLines_df for cleanup.
+
+```{r}
+# get means of our covariates per line
+covar_means = completeLines_df %>%
+  group_by(!!sym(LINE_ID_NAME)) %>%
+  summarize_at(covariateNames, mean)%>%
+  rename_at(covariateNames, ~ paste0(., '_mean'))
+# view means
+head(covar_means)
+```
+
+
+```{r}
+# get sds of our centered covariates
+covar_sds = completeLines_df %>%
+  group_by(!!sym(LINE_ID_NAME)) %>%
+  mutate_at(covariateNames, function(x) x - mean(x) ) %>%
+  ungroup() %>%
+  summarize_at(covariateNames,sd)
+# view sds
+head(covar_sds)
+```
+
+```{r}
+# merge the training shape measurement means by lineIDname
+rv_df = merge(completeLines_df, covar_means, by = LINE_ID_NAME)
+# loop over covariates, centering by the mean
+for (covar in covariateNames) {
+  rv_df[[paste0(covar, "_centered")]] = rv_df[[covar]] - rv_df[[paste0(covar, "_mean")]]
+}
+
+# divide by standard deviation
+rv_df[,str_c(covariateNames,"_centered")] = rv_df[,str_c(covariateNames,"_centered")]/covar_sds[rep(1,nrow(rv_df)),]
+
+# drop mean covariates from dataframe
+rv_df = rv_df[, !colnames(rv_df) %in% str_c(covariateNames,"_mean") ]
+```
+
+```{r}
+# set responses
+responses = rv_df[[RESPONSE]]
+```
+
+```{r}
+# remove completeLines_df
+rm(completeLines_df)
+```
+
+# create covariate design matrix
+
+This section specifies the model formula for the "full model" i.e the model that includes all shape-change covariates. This is used to create the design matrix for the covariates: $X_{covar}$
+
+```{r}
+# specify "full model" formula
+modelFormula = as.formula(" ~ 0 + line_order:fit_gauss_a_centered + line_order:fit_gauss_b_centered + line_order:fit_gauss_depth_centered + line_order:fit_gauss_sigmasq_centered + line_order:proj_hg_coeff_0_centered + line_order:proj_hg_coeff_2_centered + line_order:proj_hg_coeff_3_centered + line_order:proj_hg_coeff_4_centered + line_order:proj_hg_coeff_5_centered + line_order:proj_hg_coeff_6_centered + line_order:proj_hg_coeff_7_centered + line_order:proj_hg_coeff_8_centered + line_order:proj_hg_coeff_9_centered + line_order:proj_hg_coeff_10_centered")
+```
+
+```{r}
+# create sparse design matrix for the covariates
+X_covar = sparse.model.matrix(modelFormula, rv_df) 
+dim(X_covar)
+```
+
+```{r}
+# view some columns from the design matrix
+X_covar[1:5,1:2]
+```
+
+# create design matrix for time-fixed effects
+
+This section creates the design matrix for the time-fixed effects 
+
+```{r}
+# time fixed effects encoding matrix
+S_time = cbind(
+  bdiag(lapply(group_sizes, function(n) rep(1, n))) %*% contr.sum(length(group_sizes)),
+  bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+  )
+# time fixed effects design matrix
+X_time = kronecker(rep(1,L_), S_time)
+colnames(X_time) = str_c("alpha",1:ncol(X_time))
+dim(X_time)
+```
+
+```{r}
+X_time[1:5,1:5]
+```
+
+
+# create design matrix for line-fixed effects
+
+This section creates the design matrix for the line-fixed effects 
+
+```{r}
+# design matrix for the line fixed effects
+X_line = kronecker( contr.sum(L_, sparse = T), rep(1,T_) )
+colnames(X_line) = str_c("beta",1:ncol(X_line))
+dim(X_line)
+```
+
+```{r}
+X_line[1:5,1:5]
+```
+
+# create the design matrix
+
+This section combines each of the covariate, time effects, and line effects design matrices. Further, it specifies the linear operator matrix that retrieves all of the cleaned RVs from the model parameters.
+
+```{r}
+# create full design matrix
+designMat = cbind(rep(1,L_*T_),X_time,X_line,X_covar)
+dim(designMat)
+```
+
+```{r}
+# initialize 0's in the linear operator
+linear_op_mat = Matrix(0, nrow = T_, ncol = ncol(designMat), sparse = T )
+# matrix for estimating the cleaned RV
+linear_op_mat[,(length(group_sizes)+1):sum(group_sizes)] = bdiag(lapply(group_sizes, function(n) contr.sum(n) ))
+```
+
+# fit full model - OLS
+
+This section fits the full model - OLS. The following function fits the OLS estimators to our design matrix and response. It is written to quickly perform the matrix operations required to determine the estimators.
+
+```{r}
+###########################
+## fit a LM using model matrix and responses##
+###########################
+
+# X (n x p) : model matrix
+# Y (n x 1) : responses
+# PRINT_TIME :logical for whether we print of not
+
+# returns a list of model fits
+sparseLM = function(X, Y, PRINT_TIME = T) {
+  START_TIME = Sys.time()
+  
+  # get XtX
+  XtX = crossprod(X)
+  
+  # get X^T Y
+  XtY = crossprod(X, Y)
+  
+  # get (X^T X)^-1 matrix
+  # ...using cholesky decomp
+  XtX_inv =  try( chol2inv(Matrix::Cholesky(XtX)) )
+  
+  # catch error if XtX is singular
+  if (all(class(XtX_inv) == "try-error") ) {
+    cat("singular XtX\n")
+    return()
+  }
+  
+  # beta hat, linear model coefficients
+  beta_hat = XtX_inv %*% XtY
+  
+  # fitted values and residuals
+  y_hat = X %*% beta_hat
+  resid = Y - y_hat
+  
+  # dimensions
+  p = ncol(X)
+  n = nrow(X)
+  
+  # sum of squared residuals
+  SSR = drop(crossprod(resid))
+  
+  # sigma2 hat and variance of beta_hat
+  sigma2_hat = SSR / n 
+  var_beta_hat = sigma2_hat * XtX_inv
+
+  # total sum of squares
+  SST = sum( ( Y - mean(Y) )^2 )
+  # R-squared, AIC, BIC calculations
+  R2 = 1-SSR/SST
+  adj_R2 = 1 - (1- R2)*(n - 1)/(n - p - 1)
+  AIC = n * log(SSR/n) + 2 * p
+  BIC = n * log(SSR/n) + p * log(n)
+  # residual standard errors
+  RSE = sqrt( SSR/(n-p) )
+  
+  if (PRINT_TIME) {
+    print(Sys.time() - START_TIME)
+  }
+
+  return( list( beta_hat = beta_hat,
+                y_hat = y_hat,
+                resid = resid,
+                sigma2_hat = sigma2_hat,
+                var_beta_hat = var_beta_hat,
+                adj_R2 = adj_R2,
+                AIC = AIC,
+                BIC = BIC,
+                RSE = RSE))
+}
+```
+
+```{r}
+# fit the linear model using all data
+fit_lm_OLS = sparseLM(designMat, responses)
+```
+
+## get cleaned RVs + visualize results
+
+This section extracts the cleaned RV, and calculates the RMSE and other model performance metrics
+
+```{r}
+# get the cleaned RVs from the OLS estimators
+cleanRVs_OLS = (linear_op_mat %*% fit_lm_OLS$beta_hat[,1] )[,1]
+# find rmse of the OLS clean RV
+RMSE_OLS = sqrt( mean(cleanRVs_OLS^2) )
+```
+
+```{r}
+cat("Results for Full Model - OLS\n",
+    str_c("AIC: ", round(fit_lm_OLS$AIC/1e5,3), "e5" ), "\n",
+    str_c("BIC: ", round(fit_lm_OLS$BIC/1e5,3), "e5" ), "\n",
+    str_c("RSE: ", round(fit_lm_OLS$RSE,4), "\n" ),
+    str_c("Parameters: ", ncol(designMat), "\n"),
+    str_c("RMSE of cleaned RV to true planet: ", round(RMSE_OLS,3) ), "\n")
+```
+
+visualize cleaned RV
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(x = timeIDs, y = cleanRVs_OLS)) +
+  xlab("date") +
+  ylab("cleaned RV")
+```
+
+
+# Iteratvely Reweighted least squares
+
+This section fits the full model - IRLS. The following functions fits the IRLS estimators to our design matrix and response. It is written to quickly perform the matrix operations required to determine the estimators.
+
+```{r}
+###########################
+## fit a weighted LM using model matrix and responses##
+###########################
+
+# X (n x p) : model matrix
+# Y (n x 1) : responses
+# w (n x 1) : weights
+# PRINT_TIME :logical for whether we print of not
+
+# returns a list of model fits
+sparseWLM = function(X, Y, w, PRINT_TIME = T) {
+  START_TIME = Sys.time()
+  
+  if (is.null(w)) {
+    w = rep(1/length(Y),length(Y))
+  }
+  # weight matrix
+  W = w*Diagonal(length(w))
+  
+  # get X^T W X
+  XtWX = t(X) %*% W %*% X
+  
+  # get X^T W Y
+  XtWY = t(X) %*% W %*% Y
+  
+  # get (X^T W X)^-1 matrix
+  # ...using cholesky decomp
+  XtWX_inv =  try( chol2inv(Matrix::Cholesky(XtWX)) )
+  
+  # catch error if XtX is singular
+  if (all(class(XtWX_inv) == "try-error") ) {
+    cat("singular XtWX_inv\n")
+    return()
+  }
+  
+  # beta hat, linear model coefficients
+  beta_hat = XtWX_inv %*% XtWY
+  
+  # fitted values and residuals
+  y_hat = X %*% beta_hat
+  resid = Y - y_hat
+  
+  # dimensions
+  p = ncol(X)
+  n = nrow(X)
+  
+  # unweighted metrics
+  
+  # sum of squared residuals
+  SSR = drop(crossprod(resid))
+  
+  # sigma2 hat and variance of beta_hat
+  sigma2_hat = SSR / n 
+  var_beta_hat = sigma2_hat * XtWX_inv 
+  
+  # total sum of squares
+  SST = sum( ( Y - mean(Y) )^2 )
+  # R-squared, AIC, BIC calculations
+  R2 = 1-SSR/SST
+  adj_R2 = 1 - (1- R2)*(n - 1)/(n - p - 1)
+  AIC = n * log(SSR/n) + 2 * p
+  BIC = n * log(SSR/n) + p * log(n)
+  # residual standard errors
+  RSE = sqrt( SSR/(n-p) )
+  
+  if (PRINT_TIME) {
+    print(Sys.time() - START_TIME)
+  }
+  
+  
+  return( list( beta_hat = beta_hat,
+                y_hat = y_hat,
+                resid = resid,
+                sigma2_hat = sigma2_hat,
+                var_beta_hat = var_beta_hat,
+                adj_R2 = adj_R2,
+                AIC = AIC,
+                BIC = BIC,
+                RSE = RSE,
+                eff = 1/sum(w^2)))
+}
+```
+
+```{r}
+###########################
+## fit a IRLS using model matrix and responses##
+###########################
+
+# rse_tol : tolerance for the RSE as it changes
+# max.iter : maximum number of iterations to run
+# X (n x p) : model matrix
+# Y (n x 1) : responses
+# df : dataframe of observations
+# lineIDname : column name of the lines
+
+IRLS = function(rse_tol = 2e-05,
+                max.iter = 10,
+                X = designMat,
+                Y = responses,
+                df = rv_df,
+                lineIDname = LINE_ID_NAME) {
+  ## initialize equal weights ##
+  iter = 1
+  # weight vector
+  w_irls = rep(1, nrow(X))
+  wls_fit = sparseWLM(X, Y, w_irls)
+  # rse for each iteration
+  rse_iter = list()
+  rse_iter[[1]] = 0
+  rse_iter[[2]] = wls_fit$RSE
+  
+  while( (iter < max.iter) & (rse_iter[[iter+1]] - rse_iter[[iter]]>rse_tol) ) {
+    iter = iter + 1
+    # re-weight line-by-line, update weight vector
+    w_irls = df %>%
+      mutate(r = wls_fit$resid[,1]) %>%
+      group_by(!!sym(lineIDname)) %>%
+      mutate(sar = sum(abs(r)),
+             w = 1/sar) %>%
+      ungroup() %>%
+      pull(w)
+    w_irls = w_irls/sum(w_irls)
+    # fit new model
+    wls_fit = sparseWLM(X, Y, w_irls)
+    rse_iter[[iter + 1]] = wls_fit$RSE
+    #print(iter)
+  }
+  cat("iter: ", iter, " diff RSE: ", rse_iter[[iter+1]] - rse_iter[[iter]], "\n")
+  return(list(fit_lm = wls_fit,
+              weights = w_irls) )
+}
+```
+
+
+```{r}
+# fit the IRLS model, get the model fit and weights
+irls_results = IRLS(max.iter = 20)
+fit_lm_IRLS = irls_results$fit_lm
+w_irls = irls_results$weights
+```
+
+## get cleaned RVs + visualize results
+
+This section extracts the cleaned RV, and calculates the RMSE and other model performance metrics
+
+```{r}
+# get the cleaned RVs from the OLS estimators
+cleanRVs_IRLS = (linear_op_mat %*% fit_lm_IRLS$beta_hat[,1] )[,1]
+# find rmse of the OLS clean RV
+RMSE_IRLS = sqrt( mean(cleanRVs_IRLS^2) )
+```
+
+```{r}
+cat("Results for Full Model - IRLS\n",
+    str_c("AIC: ", round(fit_lm_IRLS$AIC/1e5,3), "e5" ), "\n",
+    str_c("BIC: ", round(fit_lm_IRLS$BIC/1e5,3), "e5" ), "\n",
+    str_c("RSE: ", round(fit_lm_IRLS$RSE,4), "\n" ),
+    str_c("Parameters: ", ncol(designMat), "\n"),
+    str_c("Effective sample size: ", round(1/sum(w_irls^2)), "\n"),
+    str_c("RMSE of cleaned RV to true planet: ", round(RMSE_IRLS,3) ), "\n")
+```
+
+visualize cleaned RV
+
+```{r}
+ggplot() +
+  geom_point(mapping = aes(x = timeIDs, y = cleanRVs_IRLS)) +
+  xlab("date") +
+  ylab("cleaned RV")
+```
+
+```{r}
+# visual of learned weights for lines
+rv_df %>%
+  mutate(weight = w_irls) %>%
+  group_by(line_order) %>%
+  summarize(mean_weight = mean(weight),
+            wavelength = mean(fit_gauss_lambdac),
+            depth = mean(fit_gauss_depth),
+            snr = mean(mean_snr_pixel)) %>%
+  ungroup() %>%
+  mutate(mean_weight = mean_weight/sum(mean_weight)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = depth, y = snr, color = mean_weight), size = .9, alpha = .8) +
+  scale_color_viridis_c(option = "plasma", name = "Weight", direction = -1) +
+  labs(
+    x = "Mean Depth",
+    y = "Mean SNR"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 8),
+    legend.position = "right"
+  )
+```
+
+
+
